@@ -5,4 +5,4 @@ pandas==2.2.2
 matplotlib
 nltk
 beautifulsoup4
-numpy
+numpy==1.26.4
