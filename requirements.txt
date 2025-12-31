@@ -1,0 +1,8 @@
+yfinance
+prophet
+curl_cffi
+pandas==2.2.2
+matplotlib
+nltk
+beautifulsoup4
+numpy
