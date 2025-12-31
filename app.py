@@ -1,5 +1,4 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 from prophet import Prophet
 from curl_cffi import requests
@@ -12,6 +11,7 @@ import scipy.special as sp
 import random
 import time
 import re
+import io
 
 # 1. INITIALIZE ENGINES
 @st.cache_resource
@@ -22,163 +22,121 @@ def load_essentials():
 sia = load_essentials()
 
 def get_secure_session():
-    user_agents = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-    ]
     session = requests.Session(impersonate="chrome")
     session.headers.update({
-        "User-Agent": random.choice(user_agents),
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
         "Referer": "https://finance.yahoo.com/"
     })
     return session
 
-# FALLBACK SCRAPER FOR FINANCIALS
-def get_financials_fallback(ticker_str, sess):
-    """Manually scrapes ROE and Debt if t.info fails"""
+# 2. DATA BYPASS LOGIC
+def fetch_stock_data_direct(ticker):
+    """Bypasses yfinance library entirely to avoid RateLimitError"""
+    sess = get_secure_session()
+    
+    # Get Price History via Download URL (More resilient)
+    end_time = int(time.time())
+    start_time = end_time - (5 * 365 * 24 * 60 * 60) # 5 years
+    download_url = f"https://query1.finance.yahoo.com/v7/finance/download/{ticker}?period1={start_time}&period2={end_time}&interval=1d&events=history"
+    
+    res = sess.get(download_url, timeout=15)
+    if res.status_code != 200:
+        return None, 0.12, 0.5, 0 # Error
+    
+    df = pd.read_csv(io.StringIO(res.text))
+    df['Date'] = pd.to_datetime(df['Date'])
+    df = df.sort_values('Date')
+    
+    # Get Stats via Scraping
+    stats_url = f"https://finance.yahoo.com/quote/{ticker}/key-statistics"
+    stats_res = sess.get(stats_url, timeout=15)
+    stats_text = stats_res.text
+    
+    # Simple extraction for ROE and Debt
+    roe = re.search(r'Return on Equity.*?([\d\.]+)%', stats_text)
+    roe_val = float(roe.group(1))/100 if roe else 0.12
+    
+    d_e = re.search(r'Total Debt/Equity.*?([\d\.]+)', stats_text)
+    d_e_val = float(d_e.group(1))/100 if d_e else 0.5
+    
+    # Get Sentiment via News Scraping
     try:
-        url = f"https://finance.yahoo.com/quote/{ticker_str}/key-statistics"
-        res = sess.get(url, timeout=10)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        text = soup.get_text()
-        
-        # Simple Regex to find ROE and Debt/Equity
-        roe = re.search(r'Return on Equity.*?([\d\.]+)%', text)
-        roe_val = float(roe.group(1))/100 if roe else 0.12
-        
-        d_e = re.search(r'Total Debt/Equity.*?([\d\.]+)', text)
-        d_e_val = float(d_e.group(1))/100 if d_e else 0.5
-        
-        return roe_val, d_e_val, True # True means we found cashflow proxy
+        news_url = f"https://www.google.com/search?q={ticker}+stock+news&tbm=nws"
+        news_res = sess.get(news_url, timeout=10)
+        soup = BeautifulSoup(news_res.text, 'html.parser')
+        headlines = [g.text for g in soup.find_all('div', dict(role='heading'))]
+        sent_scores = [sia.polarity_scores(h)['compound'] for h in headlines]
+        sentiment = 1 if (sum(sent_scores)/len(sent_scores) if sent_scores else 0) > 0.05 else 0
     except:
-        return 0.12, 0.5, True
+        sentiment = 0
 
-# 2. UI SETUP
+    return df, roe_val, d_e_val, sentiment
+
+# 3. UI SETUP
 st.set_page_config(page_title="Master AI Terminal", layout="wide")
 st.title("🏛️ Master AI Investment Terminal")
 
-# 3. SIDEBAR
+# SIDEBAR
 st.sidebar.header("⚙️ System Parameters")
 stock_symbol = st.sidebar.text_input("Stock Symbol", value="NVDA").upper()
 total_capital = st.sidebar.number_input("Total Capital ($)", value=1000)
-target_days = st.sidebar.slider("ROI Target Window (Days)", 30, 90, 90)
 
-# 4. EXECUTION
 if st.sidebar.button("🔍 Run Deep Audit"):
-    with st.spinner(f"⚙️ Bypassing Yahoo Security for {stock_symbol}..."):
-        success = False
-        sess = get_secure_session()
+    with st.spinner(f"🚀 Executing Raw Scrape for {stock_symbol}..."):
+        df, roe, de, sent = fetch_stock_data_direct(stock_symbol)
         
-        # Attempt to get history first (usually more stable)
-        for attempt in range(3):
-            try:
-                # Establishing session cookies
-                sess.get("https://fc.yahoo.com", timeout=5) 
-                t = yf.Ticker(stock_symbol, session=sess)
-                hist = t.history(period="2y")
-                if not hist.empty:
-                    success = True
-                    break
-            except:
-                time.sleep(1)
-                continue
-
-        if success:
-            # --- INDICATOR 1: FINANCIALS (SAFE FETCH) ---
-            try:
-                # Try official way first
-                info = t.info
-                roe = info.get('returnOnEquity', 0)
-                debt_to_equity = info.get('debtToEquity', 0) / 100
-                fcf = info.get('freeCashflow', 1) # Default to 1 to pass fcf > 0
-            except:
-                # Use our fallback scraper if t.info triggers RateLimit
-                roe, debt_to_equity, fcf = get_financials_fallback(stock_symbol, sess)
-            
-            f_score = (1 if (roe > 0.15 and debt_to_equity < 1.5 and fcf > 0) else 0)
-
-            # --- INDICATOR 2: SENTIMENT ---
-            try:
-                news_url = f"https://www.google.com/search?q={stock_symbol}+stock+news&tbm=nws"
-                res = sess.get(news_url, timeout=10)
-                soup = BeautifulSoup(res.text, 'html.parser')
-                headlines = [g.text for g in soup.find_all('div', dict(role='heading'))]
-                scores = [sia.polarity_scores(h)['compound'] for h in headlines]
-                sentiment_score = (1 if (sum(scores)/len(scores) if scores else 0) > 0.05 else 0)
-            except:
-                sentiment_score = 0
-
-            # --- INDICATOR 3: AI ROI ---
-            df_p = hist.reset_index()[['Date', 'Close']]
-            df_p.columns = ['ds', 'y']
+        if df is not None and not df.empty:
+            # AI Forecast
+            df_p = df[['Date', 'Close']].rename(columns={'Date': 'ds', 'Close': 'y'})
             df_p['ds'] = df_p['ds'].dt.tz_localize(None)
             m = Prophet(daily_seasonality=False, yearly_seasonality=True).fit(df_p)
             future = m.make_future_dataframe(periods=180)
             forecast = m.predict(future)
             
-            cur_p = hist['Close'].iloc[-1]
-            target_idx = -(180 - target_days)
-            roi = ((forecast.iloc[target_idx]['yhat'] - cur_p) / cur_p) * 100
-            ai_score = (1 if roi > 5 else 0) # Adjusted threshold for 2026 volatility
-
-            # --- MASTER SIGNAL ---
-            points = f_score + sentiment_score + ai_score
+            cur_p = df['Close'].iloc[-1]
+            roi = ((forecast['yhat'].iloc[-1] - cur_p) / cur_p) * 100
             
+            # SCORING
+            f_score = 1 if (roe > 0.15 and de < 1.5) else 0
+            ai_score = 1 if roi > 10 else 0
+            points = f_score + sent + ai_score
+            
+            # LOGIC
             if points == 3:
-                action_label = "🌟 ACTION: HIGH CONVICTION BUY"
-                confidence_msg = "All indicators are Green. Momentum is strong."
-                imm_buy = total_capital * 0.15 
+                action = "🌟 HIGH CONVICTION BUY"; imm = 150
             elif points >= 1:
-                action_label = "🟡 ACTION: ACCUMULATE / HOLD"
-                confidence_msg = "Partial alignment. Suggests caution or DCA."
-                imm_buy = total_capital * 0.05 
+                action = "🟡 ACCUMULATE / HOLD"; imm = 50
             else:
-                action_label = "🛑 ACTION: AVOID"
-                confidence_msg = "Weak fundamentals and AI trajectory. Stay in cash."
-                imm_buy = 0.00
-
-            parked_cash = total_capital - imm_buy
-
-            # --- UI RENDERING ---
-            st.markdown(f"### 📊 Strategic Report: {stock_symbol}")
+                action = "🛑 AVOID"; imm = 0
             
-            if points == 3: st.success(f"### {action_label}")
-            elif points >= 1: st.warning(f"### {action_label}")
-            else: st.error(f"### {action_label}")
+            # UI
+            if points == 3: st.success(f"### {action}")
+            elif points >= 1: st.warning(f"### {action}")
+            else: st.error(f"### {action}")
             
-            st.info(confidence_msg)
-
-            c1, c2, c3, c4 = st.columns(4)
+            st.info(f"Financials: {'Strong' if f_score else 'Caution'} | Sentiment: {'Bullish' if sent else 'Neutral'} | ROI: {roi:+.1f}%")
+            
+            c1, c2, c3 = st.columns(3)
             c1.metric("Points", f"{points}/3")
-            c2.metric("Target ROI", f"{roi:+.1f}%")
-            c3.metric("Financials", "STRONG" if f_score == 1 else "CAUTION")
-            c4.metric("Current Price", f"${cur_p:.2f}")
+            c2.metric("Immediate Buy", f"${imm:.2f}")
+            c3.metric("Current Price", f"${cur_p:.2f}")
 
             st.markdown("---")
             col_l, col_r = st.columns(2)
             with col_l:
-                st.subheader("🚀 PHASE 1: IMMEDIATE")
-                st.write(f"**Action:** Invest **${imm_buy:.2f}** today.")
-                if imm_buy > 0: st.write(f"Approx **{imm_buy/cur_p:.2f} shares**.")
-                st.error(f"🛡️ **Safety Stop-Loss:** ${cur_p * 0.88:.2f}")
-            
+                st.subheader("🚀 Phase 1")
+                st.write(f"Invest **${imm:.2f}** today.")
+                st.error(f"Stop-Loss: ${cur_p * 0.88:.2f}")
             with col_r:
-                st.subheader("⏳ PHASE 2: STAGING")
-                st.write(f"**Action:** Reserve **${parked_cash:.2f}**.")
+                st.subheader("⏳ Phase 2")
+                st.write(f"Reserve **${total_capital - imm:.2f}**.")
                 if points == 3:
-                    st.success("💡 **Strategy: 'Aggressive Accumulation'**")
-                    st.write(f"- Phase in ${parked_cash/2:.2f}/mo over 2 months.")
+                    st.write("Aggressive: Phase in over 2 months. Double if price drops 5%.")
                 else:
-                    st.warning("💡 **Strategy: 'Defensive Staging'**")
-                    st.write(f"- Phase in ${parked_cash/4:.2f}/mo over 4 months.")
+                    st.write("Defensive: Phase in over 4 months.")
 
             st.markdown("---")
-            st.subheader("🤖 180-DAY AI TRAJECTORY")
-            fig = m.plot(forecast)
-            plt.axvline(forecast.iloc[target_idx]['ds'], color='red', linestyle='--')
-            st.pyplot(fig)
-            
+            st.pyplot(m.plot(forecast))
         else:
-            st.error("⚠️ Yahoo is blocking the shared Streamlit IP. Refresh the page and try again.")
+            st.error("⚠️ Yahoo is blocking the direct scrape. Please try again in 1 minute.")
