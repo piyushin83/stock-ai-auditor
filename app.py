@@ -37,12 +37,17 @@ def get_secure_session():
 # 2. UI SETUP
 st.set_page_config(page_title="Master AI Terminal", layout="wide")
 st.title("🏛️ Master AI Investment Terminal")
-st.caption("Security + Financials + Phased Investing Engine")
+st.markdown("""
+<div style="background-color: #fff4f4; padding: 10px; border-radius: 5px; border: 1px solid #ffcccc;">
+    ⚠️ <b>AI ADVISORY:</b> Forecasts are mathematical probabilities. <b>Human judgment is required</b> before investing.
+</div>
+""", unsafe_allow_html=True)
 
 # 3. SIDEBAR
 st.sidebar.header("⚙️ System Parameters")
 stock_symbol = st.sidebar.text_input("Stock Symbol", value="NVDA").upper()
 total_capital = st.sidebar.number_input("Total Capital ($)", value=1000)
+target_days = st.sidebar.slider("ROI Target Window (Days)", 30, 90, 90)
 
 # 4. EXECUTION
 if st.sidebar.button("🔍 Run Deep Audit"):
@@ -93,8 +98,16 @@ if st.sidebar.button("🔍 Run Deep Audit"):
             forecast = m.predict(future)
             
             cur_p = hist['Close'].iloc[-1]
-            roi = ((forecast['yhat'].iloc[-1] - cur_p) / cur_p) * 100
+            target_idx = -(180 - target_days)
+            roi = ((forecast.iloc[target_idx]['yhat'] - cur_p) / cur_p) * 100
             
+            # Probability Math
+            final_lower = forecast.iloc[-1]['yhat_lower']
+            final_upper = forecast.iloc[-1]['yhat_upper']
+            final_mean = forecast.iloc[-1]['yhat']
+            std_dev = (final_upper - final_lower) / 2.56
+            prob_success = (1 - (0.5 * (1 + sp.erf((cur_p - final_mean) / (std_dev * np.sqrt(2)))))) * 100
+
             # --- SMART ALLOCATION ENGINE ---
             conviction_score = 0
             if roi > 10: conviction_score += 40
@@ -107,36 +120,40 @@ if st.sidebar.button("🔍 Run Deep Audit"):
             # --- UI RENDERING ---
             st.markdown(f"### 📊 Strategic Portfolio Report: {stock_symbol}")
             
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Conviction", f"{conviction_score}/100")
-            col2.metric("AI Outlook", f"{roi:+.1f}%")
-            col3.metric("Financials", "STRONG" if f_score >= 2 else "CAUTION")
-            col4.metric("Sentiment", "BULLISH" if sentiment > 0.05 else "NEUTRAL")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Conviction", f"{conviction_score}/100")
+            c2.metric("Prob. of Profit (180d)", f"{prob_success:.1f}%")
+            c3.metric(f"{target_days}-Day ROI", f"{roi:+.1f}%")
+            c4.metric("Current Price", f"${cur_p:.2f}")
 
             st.markdown("---")
-            st.subheader(f"🎯 Your ${total_capital:,} Investment Plan")
             
-            plan_l, plan_r = st.columns(2)
-            with plan_l:
-                st.success(f"**Action 1 (Immediate):** Invest **${immediate_buy:.2f}** today.")
+            # STRATEGY BOXES
+            col_l, col_r = st.columns(2)
+            
+            with col_l:
+                st.subheader("🚀 PHASE 1: IMMEDIATE")
+                st.success(f"**Action 1:** Invest **${immediate_buy:.2f}** today.")
                 st.write(f"Buy approx **{immediate_buy/cur_p:.2f} shares**.")
+                st.error(f"🛡️ **Safety Stop-Loss:** ${cur_p * 0.88:.2f}")
             
-            with plan_r:
-                st.info(f"**Action 2 (The Rest):** Move **${parked_cash:.2f}** to a 'Safe Tank'.")
+            with col_r:
+                st.subheader("⏳ PHASE 2: STAGING")
+                st.info(f"**Action 2:** Move **${parked_cash:.2f}** to reserve.")
+                
                 if conviction_score < 50:
-                    st.markdown("**Strategy: Defensive Staging**")
-                    st.write(f"- Park cash in SGOV (Short-term Treasuries) to earn ~5%.")
+                    st.warning("💡 **Strategy: 'Defensive Staging'**")
+                    st.write("- Park cash in **SGOV** (Short-term Treasuries) to earn ~5%.")
                     st.write(f"- Phase in **${parked_cash/4:.2f}/mo** over 4 months.")
                 else:
-                    st.markdown("**Strategy: Aggressive Accumulation**")
+                    st.success("💡 **Strategy: 'Aggressive Accumulation'**")
                     st.write(f"- Phase in **${parked_cash/2:.2f}/mo** over 2 months.")
-                    st.write("- **DIP TRIGGER:** If price drops 5%, **double** the monthly buy amount.")
+                    st.write("- **DIP TRIGGER:** If price drops **5%**, **double** the monthly buy amount.")
 
             st.markdown("---")
-            st.error(f"🛡️ **Safety Stop-Loss:** ${cur_p * 0.88:.2f} (Exit if price hits this level)")
-            
-            st.subheader("🤖 180-Day AI Trajectory")
+            st.subheader("🤖 180-DAY AI PRICE PROJECTION")
             fig = m.plot(forecast)
+            plt.axvline(forecast.iloc[target_idx]['ds'], color='red', linestyle='--')
             st.pyplot(fig)
             
         else:
