@@ -26,7 +26,6 @@ def get_secure_session():
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/csv,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
         "Referer": "https://finance.yahoo.com/quote/NVDA/history"
     })
     return session
@@ -60,6 +59,7 @@ def fetch_data_resilient(ticker):
         df = pd.read_csv(io.StringIO(csv_res.text))
         df['Date'] = pd.to_datetime(df['Date'])
         
+        # Fundamental Scrape
         stats_url = f"https://finance.yahoo.com/quote/{ticker}/key-statistics"
         stats_res = sess.get(stats_url, timeout=10)
         roe_match = re.search(r'Return on Equity.*?([\d\.]+)%', stats_res.text)
@@ -72,7 +72,7 @@ def fetch_data_resilient(ticker):
         return None, 0.12, 0.5, 0
 
 # 5. EXECUTION
-if st.sidebar.button("🔍 Run Full Audit"):
+if st.sidebar.button("🚀 Run Full Audit"):
     with st.spinner("🚀 Pulling raw market data and calculating signals..."):
         df, roe, de, sent = fetch_data_resilient(stock_symbol)
         
@@ -93,7 +93,7 @@ if st.sidebar.button("🔍 Run Full Audit"):
             ai_score = 1 if target_roi > 10 else 0
             points = f_score + sent + ai_score
             
-            # SIGNAL LOGIC
+            # SIGNAL LOGIC - String Literals Fixed
             if points == 3:
                 label = "🌟 ACTION: HIGH CONVICTION BUY"
                 conf = "Confidence: Strong. All three indicators are positive."
@@ -130,7 +130,8 @@ if st.sidebar.button("🔍 Run Full Audit"):
             with col_l:
                 st.subheader("🚀 Phase 1: Immediate")
                 st.write(f"**Action:** Invest **${imm_buy:.2f}** today.")
-                if imm_buy > 0: st.write(f"Approx **{imm_buy/cur_p:.2f} shares**.")
+                if imm_buy > 0:
+                    st.write(f"Approx **{imm_buy/cur_p:.2f} shares**.")
                 st.error(f"🛡️ Safety Stop-Loss: ${cur_p * 0.88:.2f}")
             with col_r:
                 st.subheader("⏳ Phase 2: Staging")
