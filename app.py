@@ -34,7 +34,6 @@ def get_secure_session():
 st.set_page_config(page_title="Master AI Terminal", layout="wide")
 st.title("🏛️ Master AI Investment Terminal")
 
-# THE MANDATORY DISCLAIMER
 st.markdown("""
 <div style="background-color: #fff4f4; padding: 15px; border-radius: 8px; border: 1px solid #ffcccc; text-align: center;">
     🛑 <b>CRITICAL ADVISORY:</b> THIS IS AI. A HUMAN SHOULD USE THEIR BRAIN BEFORE INVESTING REAL MONEY.
@@ -59,7 +58,6 @@ def fetch_data_resilient(ticker):
         df = pd.read_csv(io.StringIO(csv_res.text))
         df['Date'] = pd.to_datetime(df['Date'])
         
-        # Fundamental Scrape
         stats_url = f"https://finance.yahoo.com/quote/{ticker}/key-statistics"
         stats_res = sess.get(stats_url, timeout=10)
         roe_match = re.search(r'Return on Equity.*?([\d\.]+)%', stats_res.text)
@@ -73,11 +71,10 @@ def fetch_data_resilient(ticker):
 
 # 5. EXECUTION
 if st.sidebar.button("🚀 Run Full Audit"):
-    with st.spinner("🚀 Pulling raw market data and calculating signals..."):
+    with st.spinner("🚀 Pulling raw market data..."):
         df, roe, de, sent = fetch_data_resilient(stock_symbol)
         
         if df is not None:
-            # AI Forecast
             df_p = df[['Date', 'Close']].rename(columns={'Date': 'ds', 'Close': 'y'})
             df_p['ds'] = df_p['ds'].dt.tz_localize(None)
             m = Prophet(daily_seasonality=False, yearly_seasonality=True).fit(df_p)
@@ -88,12 +85,12 @@ if st.sidebar.button("🚀 Run Full Audit"):
             target_idx = -(180 - target_days)
             target_roi = ((forecast.iloc[target_idx]['yhat'] - cur_p) / cur_p) * 100
             
-            # SCORING (3 POINT SYSTEM)
+            # POINT SCORING
             f_score = 1 if (roe > 0.15 and de < 1.5) else 0
             ai_score = 1 if target_roi > 10 else 0
             points = f_score + sent + ai_score
             
-            # SIGNAL LOGIC - String Literals Fixed
+            # SIGNAL LOGIC
             if points == 3:
                 label = "🌟 ACTION: HIGH CONVICTION BUY"
                 conf = "Confidence: Strong. All three indicators are positive."
@@ -130,8 +127,7 @@ if st.sidebar.button("🚀 Run Full Audit"):
             with col_l:
                 st.subheader("🚀 Phase 1: Immediate")
                 st.write(f"**Action:** Invest **${imm_buy:.2f}** today.")
-                if imm_buy > 0:
-                    st.write(f"Approx **{imm_buy/cur_p:.2f} shares**.")
+                if imm_buy > 0: st.write(f"Approx **{imm_buy/cur_p:.2f} shares**.")
                 st.error(f"🛡️ Safety Stop-Loss: ${cur_p * 0.88:.2f}")
             with col_r:
                 st.subheader("⏳ Phase 2: Staging")
