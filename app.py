@@ -3,15 +3,16 @@ import yfinance as yf
 import pandas as pd
 from prophet import Prophet
 from curl_cffi import requests
+from bs4 import BeautifulSoup
 import matplotlib.pyplot as plt
 import nltk
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 import numpy as np
-import scipy.special as sp  # Added for the 'erf' function fix
+import scipy.special as sp 
 import random
 import time
 
-# 1. THE BYPASS ENGINE
+# 1. INITIALIZE ENGINES
 @st.cache_resource
 def load_essentials():
     nltk.download('vader_lexicon', quiet=True)
@@ -33,36 +34,26 @@ def get_secure_session():
     })
     return session
 
-# 2. UI CONFIGURATION
-st.set_page_config(page_title="Strategic AI Architect", layout="wide")
-st.title("🏛️ Strategic AI Investment Architect")
-
-# DISCLAIMER
-st.markdown("""
-<div style="background-color: #fff4f4; padding: 10px; border-radius: 5px; border: 1px solid #ffcccc;">
-    ⚠️ <b>AI ADVISORY:</b> Forecasts are mathematical probabilities. <b>Human judgment is required</b> before investing.
-</div>
-""", unsafe_allow_html=True)
+# 2. UI SETUP
+st.set_page_config(page_title="Master AI Terminal", layout="wide")
+st.title("🏛️ Master AI Investment Terminal")
+st.caption("Security + Financials + Phased Investing Engine")
 
 # 3. SIDEBAR
-st.sidebar.header("📍 Configuration")
-stock_symbol = st.sidebar.text_input("Enter Ticker", value="NVDA").upper()
-total_budget = st.sidebar.number_input("Total Budget ($)", value=1000)
-target_days = st.sidebar.slider("ROI Target Window (Days)", 30, 90, 90)
+st.sidebar.header("⚙️ System Parameters")
+stock_symbol = st.sidebar.text_input("Stock Symbol", value="NVDA").upper()
+total_capital = st.sidebar.number_input("Total Capital ($)", value=1000)
 
-# 4. MAIN AUDIT
-if st.sidebar.button("🚀 Run Full Strategic Audit"):
-    success = False
-    with st.spinner(f'Establishing encrypted tunnel for {stock_symbol}...'):
+# 4. EXECUTION
+if st.sidebar.button("🔍 Run Deep Audit"):
+    with st.spinner(f"⚙️ Auditing {stock_symbol}..."):
+        success = False
         for attempt in range(3):
             try:
                 sess = get_secure_session()
-                # Bypass handshake
                 sess.get("https://fc.yahoo.com", timeout=5) 
-                
                 t = yf.Ticker(stock_symbol, session=sess)
-                hist = t.history(period="2y", interval="1d", timeout=10)
-                
+                hist = t.history(period="5y")
                 if not hist.empty:
                     success = True
                     break
@@ -71,62 +62,82 @@ if st.sidebar.button("🚀 Run Full Strategic Audit"):
                 continue
 
         if success:
-            # --- CALCULATIONS ---
+            # --- FINANCIAL AUDIT ---
             info = t.info
-            roe = info.get('returnOnEquity', 0.12)
+            roe = info.get('returnOnEquity', 0)
+            debt_to_equity = info.get('debtToEquity', 0) / 100
+            fcf = info.get('freeCashflow', 0)
             
+            f_score = 0
+            if roe > 0.15: f_score += 1
+            if debt_to_equity < 1.5: f_score += 1
+            if fcf > 0: f_score += 1
+
+            # --- SENTIMENT AUDIT ---
+            try:
+                news_url = f"https://www.google.com/search?q={stock_symbol}+stock+news&tbm=nws"
+                res = sess.get(news_url, timeout=10)
+                soup = BeautifulSoup(res.text, 'html.parser')
+                headlines = [g.text for g in soup.find_all('div', dict(role='heading'))]
+                scores = [sia.polarity_scores(h)['compound'] for h in headlines]
+                sentiment = sum(scores)/len(scores) if scores else 0
+            except:
+                sentiment = 0
+
+            # --- AI PREDICTION (180 Days) ---
             df_p = hist.reset_index()[['Date', 'Close']]
             df_p.columns = ['ds', 'y']
             df_p['ds'] = df_p['ds'].dt.tz_localize(None)
+            m = Prophet(daily_seasonality=True).fit(df_p)
+            future = m.make_future_dataframe(periods=180)
+            forecast = m.predict(future)
             
-            m = Prophet(daily_seasonality=False, yearly_seasonality=True, interval_width=0.8)
-            m.fit(df_p)
+            cur_p = hist['Close'].iloc[-1]
+            roi = ((forecast['yhat'].iloc[-1] - cur_p) / cur_p) * 100
             
-            future_180 = m.make_future_dataframe(periods=180)
-            forecast_180 = m.predict(future_180)
+            # --- SMART ALLOCATION ENGINE ---
+            conviction_score = 0
+            if roi > 10: conviction_score += 40
+            if f_score >= 2: conviction_score += 40
+            if sentiment > 0: conviction_score += 20
             
-            price_now = hist['Close'].iloc[-1]
-            target_idx = -(180 - target_days)
-            price_at_target = forecast_180.iloc[target_idx]['yhat']
-            pred_roi = ((price_at_target - price_now) / price_now) * 100
+            immediate_buy = (conviction_score / 100) * total_capital
+            parked_cash = total_capital - immediate_buy
 
-            # FIXED PROBABILITY MATH using scipy.special.erf
-            final_lower = forecast_180.iloc[-1]['yhat_lower']
-            final_upper = forecast_180.iloc[-1]['yhat_upper']
-            final_mean = forecast_180.iloc[-1]['yhat']
-            std_dev = (final_upper - final_lower) / 2.56
+            # --- UI RENDERING ---
+            st.markdown(f"### 📊 Strategic Portfolio Report: {stock_symbol}")
             
-            # Using sp.erf instead of np.erf
-            prob_success = (1 - (0.5 * (1 + sp.erf((price_now - final_mean) / (std_dev * np.sqrt(2)))))) * 100
-
-            # ALLOCATION
-            score = 0
-            if pred_roi > 5: score += 40 
-            if roe > 0.15: score += 60
-            imm_cash = total_budget * (score / 100)
-            rem_cash = total_budget - imm_cash
-
-            # --- DISPLAY ---
-            st.markdown(f"### 📊 Deep Audit: {stock_symbol}")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Conviction Score", f"{score}/100")
-            c2.metric("Prob. of Profit (180d)", f"{prob_success:.1f}%")
-            c3.metric(f"{target_days}-Day ROI", f"{pred_roi:+.1f}%")
-            c4.metric("Current Price", f"${price_now:.2f}")
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Conviction", f"{conviction_score}/100")
+            col2.metric("AI Outlook", f"{roi:+.1f}%")
+            col3.metric("Financials", "STRONG" if f_score >= 2 else "CAUTION")
+            col4.metric("Sentiment", "BULLISH" if sentiment > 0.05 else "NEUTRAL")
 
             st.markdown("---")
-            col_l, col_r = st.columns(2)
-            with col_l:
-                st.subheader("🚀 PHASE 1: IMMEDIATE")
-                st.success(f"**BUY:** Invest **${imm_cash:.2f}** today.")
-            with col_r:
-                st.subheader("⏳ PHASE 2: STAGING")
-                st.info(f"**HOLD:** Park **${rem_cash:.2f}** in SGOV ETF.")
+            st.subheader(f"🎯 Your ${total_capital:,} Investment Plan")
+            
+            plan_l, plan_r = st.columns(2)
+            with plan_l:
+                st.success(f"**Action 1 (Immediate):** Invest **${immediate_buy:.2f}** today.")
+                st.write(f"Buy approx **{immediate_buy/cur_p:.2f} shares**.")
+            
+            with plan_r:
+                st.info(f"**Action 2 (The Rest):** Move **${parked_cash:.2f}** to a 'Safe Tank'.")
+                if conviction_score < 50:
+                    st.markdown("**Strategy: Defensive Staging**")
+                    st.write(f"- Park cash in SGOV (Short-term Treasuries) to earn ~5%.")
+                    st.write(f"- Phase in **${parked_cash/4:.2f}/mo** over 4 months.")
+                else:
+                    st.markdown("**Strategy: Aggressive Accumulation**")
+                    st.write(f"- Phase in **${parked_cash/2:.2f}/mo** over 2 months.")
+                    st.write("- **DIP TRIGGER:** If price drops 5%, **double** the monthly buy amount.")
 
             st.markdown("---")
-            st.subheader("🤖 180-DAY AI PRICE PROJECTION")
-            fig1 = m.plot(forecast_180)
-            plt.axvline(forecast_180.iloc[target_idx]['ds'], color='red', linestyle='--')
-            st.pyplot(fig1)
+            st.error(f"🛡️ **Safety Stop-Loss:** ${cur_p * 0.88:.2f} (Exit if price hits this level)")
+            
+            st.subheader("🤖 180-Day AI Trajectory")
+            fig = m.plot(forecast)
+            st.pyplot(fig)
+            
         else:
-            st.error("⚠️ Connection Error: Yahoo is blocking requests. Please try again in 1 minute.")
+            st.error("⚠️ Connection Error: Yahoo is blocking requests. Please try again in 30 seconds.")
