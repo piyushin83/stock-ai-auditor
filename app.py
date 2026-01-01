@@ -13,26 +13,19 @@ st.set_page_config(page_title="Strategic AI Investment Architect", layout="wide"
 
 st.markdown("""
 <style>
-    /* Metric Boxes Styling */
     [data-testid="stMetricValue"] { font-size: 32px !important; font-weight: 800 !important; color: #1f77b4; }
     [data-testid="stMetricLabel"] p { font-size: 16px !important; font-weight: 600 !important; color: #333; }
-    /* Strategy Highlight Boxes */
     .stop-loss-box { background-color: #fff1f1; padding: 15px; border-radius: 8px; border-left: 6px solid #ff4b4b; margin: 15px 0; }
     .stop-loss-text { font-size: 18px; font-weight: bold; color: #d32f2f; margin: 0; }
-    /* Phase Card Styling */
-    .phase-card { background-color: #f8f9fa; padding: 20px; border-radius: 12px; border: 1px solid #dee2e6; height: 100%; }
-    .disclaimer-box { background-color: #fffde7; padding: 15px; border-radius: 5px; border: 1px solid #fbc02d; font-size: 13px; color: #5d4037; margin-bottom: 25px;}
+    .risk-box { background-color: #fffde7; padding: 15px; border-radius: 8px; border-left: 6px solid #fbc02d; margin: 15px 0; }
+    .phase-card { background-color: #f8f9fa; padding: 20px; border-radius: 12px; border: 1px solid #dee2e6; min-height: 250px; }
+    .disclaimer-box { background-color: #f4f4f4; padding: 10px; border-radius: 5px; font-size: 12px; color: #666; margin-bottom: 20px;}
 </style>
 """, unsafe_allow_html=True)
 
 # 2. HEADER & DISCLAIMER
 st.title("🏛️ Strategic AI Investment Architect")
-st.markdown("""
-<div class="disclaimer-box">
-    <b>⚠️ LEGAL DISCLAIMER:</b> Educational tool only. AI (Prophet) projections are mathematical probabilities, not guarantees. 
-    Past performance is not indicative of future results. <b>Human judgment is mandatory.</b>
-</div>
-""", unsafe_allow_html=True)
+st.markdown('<div class="disclaimer-box"><b>LEGAL:</b> Educational tool only. No financial advice provided. AI projections are probabilistic.</div>', unsafe_allow_html=True)
 
 # 3. ENGINES
 def get_exchange_rate(from_curr, to_curr):
@@ -41,7 +34,7 @@ def get_exchange_rate(from_curr, to_curr):
         pair = f"{from_curr}{to_curr}=X"
         data = yf.download(pair, period="1d", progress=False)
         return data['Close'].iloc[-1]
-    except: return 1.07 if to_curr == "USD" else 0.93
+    except: return 1.07
 
 def resolve_smart_ticker(user_input):
     user_input = user_input.strip()
@@ -92,7 +85,7 @@ total_capital = st.sidebar.number_input(f"Total Capital ({display_currency})", v
 
 # 5. EXECUTION
 if st.sidebar.button("🚀 Execute Strategic Audit"):
-    with st.spinner(f"📡 Analyzing {user_query}..."):
+    with st.spinner(f"📡 Resolving Global Markets for '{user_query}'..."):
         ticker, name, suffix, native_curr = resolve_smart_ticker(user_query)
         df, health = get_audit_data(ticker, suffix)
         
@@ -109,65 +102,66 @@ if st.sidebar.button("🚀 Execute Strategic Audit"):
             conv_p = raw_p * fx_rate
             roi_180 = ((forecast['yhat'].iloc[-1] - raw_p) / raw_p) * 100
             
-            # --- SCORING ENGINE ---
+            # SCORING & LOGIC
             points = (1 if health['ROE'] > 0.15 else 0) + (1 if roi_180 > 10 else 0) + (1 if health['Debt'] < 1.1 else 0)
             conviction_score = int((points / 3) * 100)
-            prob_profit = 50 + (roi_180 / 2) if roi_180 > 0 else 50 - abs(roi_180 / 2)
-            prob_profit = max(min(prob_profit, 99), 1) # Clamp between 1-99%
+            prob_profit = max(min(50 + (roi_180 / 2), 99), 1)
 
-            # --- STRATEGY LOGIC ---
             if points == 3:
-                mode, action_label, pct, sl_buf = "Aggressive", "🌟 HIGH CONVICTION BUY", 0.15, 0.90
-                confidence_msg = "Strong. All indicators are positive."
+                mode, action_label, pct, sl_buf = "Aggressive", "🌟 HIGH CONVICTION BUY", 15, 0.90
+                risk_level = "Low-to-Moderate (Strong Fundamentals)"
             elif points >= 1:
-                mode, action_label, pct, sl_buf = "Defensive", "🟡 ACCUMULATE / HOLD", 0.05, 0.85
-                confidence_msg = "Moderate. One or more indicators suggest caution."
+                mode, action_label, pct, sl_buf = "Defensive", "🟡 ACCUMULATE / HOLD", 5, 0.85
+                risk_level = "Moderate (Mixed Indicators)"
             else:
-                mode, action_label, pct, sl_buf = "Preservation", "🛑 AVOID / SELL", 0.0, 0.0
-                confidence_msg = "Low. Key indicators are negative or stagnant."
+                mode, action_label, pct, sl_buf = "Preservation", "🛑 AVOID / SELL", 0, 0.0
+                risk_level = "High (Weak Fundamentals/Trend)"
 
-            imm_buy = total_capital * pct
-            staging_amt = total_capital - imm_buy
-
-            # --- OUTPUT: METRICS BAR ---
+            # --- OUTPUT: METRICS ---
             st.subheader(f"📊 Deep Audit: {name} ({ticker}{suffix})")
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Conviction Score", f"{conviction_score}/100")
             m2.metric("Prob. of Profit (180d)", f"{prob_profit:.1f}%")
             m3.metric("180-Day AI ROI", f"{roi_180:+.1f}%")
-            m4.metric(f"Current Price ({display_currency})", f"{symbol}{conv_p:.2f}")
+            m4.metric(f"Price ({display_currency})", f"{symbol}{conv_p:.2f}")
 
-            # --- OUTPUT: STRATEGY BOX ---
+            # --- OUTPUT: RISK & STRATEGY ---
             st.markdown("---")
             st.success(f"### ACTION: {action_label}")
-            st.write(f"**Confidence:** {confidence_msg}")
+            st.markdown(f'<div class="risk-box"><b>⚠️ RISK ASSESSMENT:</b> {risk_level}. ' + 
+                        (f"Primary risk includes high debt or negative ROI trend." if points < 2 else "Standard market volatility applies.") + '</div>', unsafe_allow_html=True)
             
             if pct > 0:
-                sl_price = conv_p * sl_buf
-                st.markdown(f'<div class="stop-loss-box"><p class="stop-loss-text">STOP LOSS: Exit below {symbol}{sl_price:.2f} ({(1-sl_buf)*100:.0f}% Buffer)</p></div>', unsafe_allow_html=True)
-            else:
-                st.markdown(f'<div class="stop-loss-box"><p class="stop-loss-text">STOP LOSS: No entry recommended. Keep 100% in Cash/SGOV.</p></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="stop-loss-box"><p class="stop-loss-text">STOP LOSS: Exit below {symbol}{conv_p * sl_buf:.2f}</p></div>', unsafe_allow_html=True)
 
-            # --- OUTPUT: PHASED PLAN ---
+            # --- OUTPUT: DETAILED PHASES ---
             st.markdown("---")
             p1, p2 = st.columns(2)
             with p1:
                 st.markdown('<div class="phase-card">', unsafe_allow_html=True)
                 st.subheader("🚀 PHASE 1: IMMEDIATE")
-                if imm_buy > 0:
-                    st.write(f"**BUY:** Invest **{symbol}{imm_buy:,.2f}** today.")
-                else:
-                    st.write(f"**AVOID/SELL:** Invest **{symbol}0.00** (Keep in cash).")
+                st.write(f"**Allocation:** {pct}% of total funds.")
+                st.write(f"**Strategic Goal:** Establish a core position while current momentum is valid.")
+                st.write(f"**Amount Today:** {symbol}{total_capital * (pct/100):,.2f}")
                 st.markdown('</div>', unsafe_allow_html=True)
                 
             with p2:
                 st.markdown('<div class="phase-card">', unsafe_allow_html=True)
                 st.subheader("⏳ PHASE 2: STAGING")
-                if staging_amt > 0 and points > 0:
-                    st.write(f"**HOLD:** Park **{symbol}{staging_amt:,.2f}** in SGOV ETF or Cash for staged entry.")
-                else:
-                    st.write(f"**RESERVE:** Maintain **{symbol}{total_capital:,.2f}** in cash reserves.")
+                st.write(f"**Allocation:** {100-pct}% of total funds.")
+                st.write(f"**Strategic Goal:** Buy the dips. Deploy remainder over 180 days only if price stays above Stop Loss.")
+                st.write(f"**Reserve Amount:** {symbol}{total_capital * ((100-pct)/100):,.2f}")
                 st.markdown('</div>', unsafe_allow_html=True)
+
+            # --- OUTPUT: HEALTH TABLE (Above Chart) ---
+            st.markdown("---")
+            st.subheader("🏥 Company Health Detail")
+            
+            st.table(pd.DataFrame({
+                "Metric": ["ROE (Efficiency)", "Debt/Equity", "Current Ratio", "Profit Margin"],
+                "Status": [f"{health['ROE']*100:.1f}%", health['Debt'], health['Ratio'], health['Margin']],
+                "Rating": ["✅ Prime" if health['ROE'] > 0.15 else "⚠️ Low/NA", "✅ Safe" if health['Debt'] < 1.1 else "⚠️ High/NA", "✅ Liquid", "✅ Stable"]
+            }))
 
             # --- OUTPUT: 180-DAY GRAPH ---
             st.markdown("---")
@@ -176,15 +170,5 @@ if st.sidebar.button("🚀 Execute Strategic Audit"):
             fig = m.plot(forecast)
             plt.title(f"{name} Growth Forecast")
             st.pyplot(fig)
-            
-            # --- OUTPUT: HEALTH AUDIT ---
-            st.markdown("---")
-            st.subheader("🏥 Company Health Detail")
-            st.table(pd.DataFrame({
-                "Metric": ["ROE (Efficiency)", "Debt/Equity", "Current Ratio", "Profit Margin"],
-                "Status": [f"{health['ROE']*100:.1f}%", health['Debt'], health['Ratio'], health['Margin']],
-                "Rating": ["✅ Prime" if health['ROE'] > 0.15 else "⚠️ Low/NA", "✅ Safe" if health['Debt'] < 1.1 else "⚠️ High/NA", "✅ Liquid", "✅ Stable"]
-            }))
-
         else:
-            st.error(f"❌ Error: Found {user_query} but could not pull market data.")
+            st.error(f"❌ Error: Data unavailable for {user_query}.")
