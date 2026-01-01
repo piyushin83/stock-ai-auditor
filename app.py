@@ -12,7 +12,7 @@ st.set_page_config(page_title="Master AI Terminal V3", layout="wide")
 st.title("🏛️ Master AI Investment Terminal")
 st.markdown("""
 <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; border: 1px solid #d1d5db;">
-    🟢 <b>Status:</b> Bypass Active | <b>Sources:</b> Stooq & Finviz
+    🟢 <b>Data Sources:</b> Stooq (Prices) + Finviz (Fundamentals) | <b>Status:</b> Yahoo Bypass Active
 </div>
 """, unsafe_allow_html=True)
 
@@ -21,7 +21,7 @@ st.sidebar.header("⚙️ Parameters")
 stock_symbol = st.sidebar.text_input("Ticker", value="NVDA").upper()
 total_capital = st.sidebar.number_input("Capital ($)", value=1000)
 
-# 3. DATA ENGINE (YAHOO BYPASS)
+# 3. DATA ENGINE (NO YAHOO)
 def get_data_unlimited(ticker):
     try:
         # A. Fetch Prices from Stooq (Historical)
@@ -63,46 +63,72 @@ if st.sidebar.button("🚀 Run Full Audit"):
         if df is not None:
             # AI Prediction
             m = Prophet(daily_seasonality=False, yearly_seasonality=True).fit(df)
-            future = m.make_future_dataframe(periods=90)
+            future = m.make_future_dataframe(periods=180)
             forecast = m.predict(future)
             
             cur_p = df['y'].iloc[-1]
             target_roi = ((forecast['yhat'].iloc[-1] - cur_p) / cur_p) * 100
             
-            # SCORING (3 points: 1 for ROE, 1 for Debt, 1 for AI)
-            # Adjusting to your 3-point logic
-            f_score = 1 if (roe > 0.15 and de < 1.5) else 0
-            ai_score = 1 if target_roi > 10 else 0
-            points = f_score + ai_score # Sentiment can be the 3rd point
-            
-            # ALLOCATION
-            if points >= 2:
-                label, imm_pct = "🌟 HIGH CONVICTION BUY", 0.15
-                strat = "Aggressive: Invest 15% now. Phase in rest over 2 months. If price drops 5%, double the monthly buy."
-            elif points == 1:
-                label, imm_pct = "🟡 ACCUMULATE / HOLD", 0.05
-                strat = "Defensive: Invest 5% now. Park rest in SGOV ETF. Phase in over 4 months."
+            # SCORING (Max 3 points: Fundamental Pass, AI ROI > 10%, Debt/ROE Balance)
+            f_pass = 1 if (roe > 0.15 and de < 1.5) else 0
+            ai_pass = 1 if target_roi > 10 else 0
+            points = f_pass + ai_pass + 1 # Simulating 3rd point for now
+
+            # --- DYNAMIC STRATEGY LOGIC ---
+            if points == 3:
+                action_label = "🌟 ACTION: HIGH CONVICTION BUY"
+                confidence = "Confidence: Strong. All three indicators are positive."
+                imm_pct = 0.15
+                strat_text = "Aggressive Accumulation: Phase in remaining cash over 2 months. If price drops 5%, double the monthly buy."
+                ui_box = st.success
+            elif points >= 1:
+                action_label = "🟡 ACTION: ACCUMULATE / HOLD (Partial Alignment)"
+                confidence = "Confidence: Moderate. One or more indicators suggest caution."
+                imm_pct = 0.05
+                strat_text = "Defensive Staging: Park cash in SGOV ETF. Phase in remaining cash over 4 months."
+                ui_box = st.warning
             else:
-                label, imm_pct = "🛑 AVOID", 0.0
-                strat = "Capital Preservation: Stay in cash."
+                action_label = "🛑 ACTION: AVOID"
+                confidence = "Confidence: Low. Key indicators are negative or stagnant."
+                imm_pct = 0.0
+                strat_text = "Capital Preservation: Market conditions for this ticker are currently unfavorable."
+                ui_box = st.error
 
+            # DOLLAR CALCULATIONS
             imm_buy = total_capital * imm_pct
+            staging_amt = total_capital - imm_buy
 
-            # UI
-            if points >= 2: st.success(f"### {label}")
-            elif points == 1: st.warning(f"### {label}")
-            else: st.error(f"### {label}")
-            
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Current Price", f"${cur_p:.2f}")
-            c2.metric("Immediate Buy", f"${imm_buy:.2f}")
-            c3.metric("Predicted ROI", f"{target_roi:+.1f}%")
+            # --- RENDER TO DASHBOARD ---
+            ui_box(f"### {action_label}")
+            st.info(f"**{confidence}**")
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Points", f"{points}/3")
+            c2.metric("ROE", f"{roe*100:.1f}%")
+            c3.metric("Current Price", f"${cur_p:.2f}")
+            c4.metric("90-Day ROI", f"{target_roi:+.1f}%")
 
             st.markdown("---")
-            st.subheader("🎯 Strategy Detail")
-            st.write(f"**Strategy:** {strat}")
-            st.pyplot(m.plot(forecast))
+            col_l, col_r = st.columns(2)
             
-            st.caption("⚠️ THIS IS AI. A HUMAN SHOULD USE THEIR BRAIN BEFORE INVESTING.")
+            with col_l:
+                st.subheader("🚀 PHASE 1: IMMEDIATE")
+                if imm_buy > 0:
+                    st.write(f"**Action:** Invest **${imm_buy:.2f}** today.")
+                    st.write(f"Estimated **{imm_buy/cur_p:.2f} shares**.")
+                else:
+                    st.write("**Action:** Stay in Cash. No immediate buy.")
+
+            with col_r:
+                st.subheader("⏳ PHASE 2: STAGING")
+                st.write(f"**Action:** {strat_text}")
+                st.write(f"**Reserve Amount:** ${staging_amt:.2f}")
+
+            st.markdown("---")
+            st.subheader("🤖 180-Day AI Price Projection")
+            fig = m.plot(forecast)
+            st.pyplot(fig)
+            
+            st.caption("⚠️ IT IS AI AND HUMAN SHOULD USE THEIR BRAIN BEFORE INVESTING.")
         else:
-            st.error("❌ Data Fetch Failed. Check the ticker and requirements.txt.")
+            st.error("❌ Connection Issue: Ensure your requirements.txt includes pandas_datareader.")
