@@ -5,3 +5,4 @@ pandas_datareader
 beautifulsoup4
 requests
 matplotlib
+lxml
