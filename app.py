@@ -13,12 +13,15 @@ st.set_page_config(page_title="Strategic AI Investment Architect", layout="wide"
 
 st.markdown("""
 <style>
-    [data-testid="stMetricValue"] { font-size: 28px !important; font-weight: 700 !important; }
-    [data-testid="stMetricLabel"] p { font-size: 14px !important; color: #555; }
-    .stop-loss-box { background-color: #fff1f1; padding: 15px; border-radius: 8px; border-left: 6px solid #ff4b4b; margin-bottom: 20px; }
+    /* Metric Boxes Styling */
+    [data-testid="stMetricValue"] { font-size: 32px !important; font-weight: 800 !important; color: #1f77b4; }
+    [data-testid="stMetricLabel"] p { font-size: 16px !important; font-weight: 600 !important; color: #333; }
+    /* Strategy Highlight Boxes */
+    .stop-loss-box { background-color: #fff1f1; padding: 15px; border-radius: 8px; border-left: 6px solid #ff4b4b; margin: 15px 0; }
     .stop-loss-text { font-size: 18px; font-weight: bold; color: #d32f2f; margin: 0; }
-    .phase-card { background-color: #f8f9fa; padding: 15px; border-radius: 10px; border-top: 4px solid #1f77b4; }
-    .disclaimer-box { background-color: #fef9e7; padding: 15px; border-radius: 5px; border: 1px solid #f1c40f; font-size: 12px; color: #7f8c8d; margin-bottom: 20px;}
+    /* Phase Card Styling */
+    .phase-card { background-color: #f8f9fa; padding: 20px; border-radius: 12px; border: 1px solid #dee2e6; height: 100%; }
+    .disclaimer-box { background-color: #fffde7; padding: 15px; border-radius: 5px; border: 1px solid #fbc02d; font-size: 13px; color: #5d4037; margin-bottom: 25px;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -26,13 +29,12 @@ st.markdown("""
 st.title("🏛️ Strategic AI Investment Architect")
 st.markdown("""
 <div class="disclaimer-box">
-    <b>⚠️ LEGAL DISCLAIMER:</b> This terminal is an AI analytical tool for educational purposes only. 
-    It is not financial advice. AI projections do not guarantee future results. 
-    <b>Human judgment is mandatory before investing.</b>
+    <b>⚠️ LEGAL DISCLAIMER:</b> Educational tool only. AI (Prophet) projections are mathematical probabilities, not guarantees. 
+    Past performance is not indicative of future results. <b>Human judgment is mandatory.</b>
 </div>
 """, unsafe_allow_html=True)
 
-# 3. ENGINES (Search, Currency, Audit)
+# 3. ENGINES
 def get_exchange_rate(from_curr, to_curr):
     if from_curr == to_curr: return 1.0
     try:
@@ -84,13 +86,13 @@ def get_audit_data(ticker, suffix):
 
 # 4. SIDEBAR
 st.sidebar.header("⚙️ Configuration")
-user_query = st.sidebar.text_input("Company Name or Ticker", value="Microsoft")
+user_query = st.sidebar.text_input("Company Name or Ticker", value="Nvidia")
 display_currency = st.sidebar.selectbox("Display Currency", ["USD", "EUR"])
 total_capital = st.sidebar.number_input(f"Total Capital ({display_currency})", value=1000)
 
 # 5. EXECUTION
-if st.sidebar.button("🚀 Execute Full Audit"):
-    with st.spinner(f"📡 Resolving Global Markets for '{user_query}'..."):
+if st.sidebar.button("🚀 Execute Strategic Audit"):
+    with st.spinner(f"📡 Analyzing {user_query}..."):
         ticker, name, suffix, native_curr = resolve_smart_ticker(user_query)
         df, health = get_audit_data(ticker, suffix)
         
@@ -107,56 +109,82 @@ if st.sidebar.button("🚀 Execute Full Audit"):
             conv_p = raw_p * fx_rate
             roi_180 = ((forecast['yhat'].iloc[-1] - raw_p) / raw_p) * 100
             
-            # CONVICTION & STRATEGY
+            # --- SCORING ENGINE ---
             points = (1 if health['ROE'] > 0.15 else 0) + (1 if roi_180 > 10 else 0) + (1 if health['Debt'] < 1.1 else 0)
-            if points >= 2: mode, label, pct, sl_buf = "Aggressive", "🌟 STRONG BUY", 0.15, 0.90
-            elif points == 1: mode, label, pct, sl_buf = "Defensive", "🟡 ACCUMULATE", 0.05, 0.85
-            else: mode, label, pct, sl_buf = "Preservation", "🛑 AVOID", 0.0, 0.0
+            conviction_score = int((points / 3) * 100)
+            prob_profit = 50 + (roi_180 / 2) if roi_180 > 0 else 50 - abs(roi_180 / 2)
+            prob_profit = max(min(prob_profit, 99), 1) # Clamp between 1-99%
+
+            # --- STRATEGY LOGIC ---
+            if points == 3:
+                mode, action_label, pct, sl_buf = "Aggressive", "🌟 HIGH CONVICTION BUY", 0.15, 0.90
+                confidence_msg = "Strong. All indicators are positive."
+            elif points >= 1:
+                mode, action_label, pct, sl_buf = "Defensive", "🟡 ACCUMULATE / HOLD", 0.05, 0.85
+                confidence_msg = "Moderate. One or more indicators suggest caution."
+            else:
+                mode, action_label, pct, sl_buf = "Preservation", "🛑 AVOID / SELL", 0.0, 0.0
+                confidence_msg = "Low. Key indicators are negative or stagnant."
 
             imm_buy = total_capital * pct
             staging_amt = total_capital - imm_buy
 
-            # --- OUTPUT: HEADER ---
-            st.subheader(f"📊 Audit Result: {name} ({ticker}{suffix})")
-            st.success(f"### Strategy Mode: {mode} - {label}")
+            # --- OUTPUT: METRICS BAR ---
+            st.subheader(f"📊 Deep Audit: {name} ({ticker}{suffix})")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Conviction Score", f"{conviction_score}/100")
+            m2.metric("Prob. of Profit (180d)", f"{prob_profit:.1f}%")
+            m3.metric("180-Day AI ROI", f"{roi_180:+.1f}%")
+            m4.metric(f"Current Price ({display_currency})", f"{symbol}{conv_p:.2f}")
+
+            # --- OUTPUT: STRATEGY BOX ---
+            st.markdown("---")
+            st.success(f"### ACTION: {action_label}")
+            st.write(f"**Confidence:** {confidence_msg}")
             
-            # STOP LOSS
-            sl_price = conv_p * sl_buf
-            sl_text = f"STOP LOSS: Exit immediately if price drops below {symbol}{sl_price:.2f} ({(1-sl_buf)*100:.0f}% Buffer)" if pct > 0 else "STOP LOSS: No entry recommended."
-            st.markdown(f'<div class="stop-loss-box"><p class="stop-loss-text">{sl_text}</p></div>', unsafe_allow_html=True)
+            if pct > 0:
+                sl_price = conv_p * sl_buf
+                st.markdown(f'<div class="stop-loss-box"><p class="stop-loss-text">STOP LOSS: Exit below {symbol}{sl_price:.2f} ({(1-sl_buf)*100:.0f}% Buffer)</p></div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="stop-loss-box"><p class="stop-loss-text">STOP LOSS: No entry recommended. Keep 100% in Cash/SGOV.</p></div>', unsafe_allow_html=True)
 
-            # METRICS
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Action 1: Buy Today", f"{symbol}{imm_buy:.2f}")
-            c2.metric("Conviction Score", f"{int((points/3)*100)}%")
-            c3.metric("180-Day AI ROI", f"{roi_180:+.1f}%")
-            c4.metric(f"Current Price ({display_currency})", f"{symbol}{conv_p:.2f}")
-
-            # --- OUTPUT: PHASES ---
+            # --- OUTPUT: PHASED PLAN ---
             st.markdown("---")
             p1, p2 = st.columns(2)
             with p1:
-                st.markdown(f'<div class="phase-card"><h4>🚀 PHASE 1: IMMEDIATE</h4><p><b>Action:</b> {"BUY - Invest " + symbol + f"{imm_buy:,.2f}" + " today." if imm_buy > 0 else "HOLD - Do not deploy capital."}</p></div>', unsafe_allow_html=True)
+                st.markdown('<div class="phase-card">', unsafe_allow_html=True)
+                st.subheader("🚀 PHASE 1: IMMEDIATE")
+                if imm_buy > 0:
+                    st.write(f"**BUY:** Invest **{symbol}{imm_buy:,.2f}** today.")
+                else:
+                    st.write(f"**AVOID/SELL:** Invest **{symbol}0.00** (Keep in cash).")
+                st.markdown('</div>', unsafe_allow_html=True)
+                
             with p2:
-                st.markdown(f'<div class="phase-card"><h4>⏳ PHASE 2: STAGING</h4><p><b>Action:</b> {"Deploy remaining " + symbol + f"{staging_amt:,.2f}" + " over 180 days." if staging_amt > 0 else "Keep cash in reserves."}</p></div>', unsafe_allow_html=True)
-
-            # --- OUTPUT: HEALTH TABLE ---
-            st.markdown("---")
-            st.subheader("🏥 Company Health Detail")
-            st.table(pd.DataFrame({
-                "Metric": ["ROE (Efficiency)", "Debt/Equity", "Current Ratio", "Profit Margin"],
-                "Status": [f"{health['ROE']*100:.1f}%", health['Debt'], health['Ratio'], health['Margin']],
-                "Rating": ["✅ Prime" if health['ROE'] > 0.15 else "⚠️ Low", "✅ Safe" if health['Debt'] < 1.1 else "⚠️ High", "✅ Liquid", "✅ Stable"]
-            }))
+                st.markdown('<div class="phase-card">', unsafe_allow_html=True)
+                st.subheader("⏳ PHASE 2: STAGING")
+                if staging_amt > 0 and points > 0:
+                    st.write(f"**HOLD:** Park **{symbol}{staging_amt:,.2f}** in SGOV ETF or Cash for staged entry.")
+                else:
+                    st.write(f"**RESERVE:** Maintain **{symbol}{total_capital:,.2f}** in cash reserves.")
+                st.markdown('</div>', unsafe_allow_html=True)
 
             # --- OUTPUT: 180-DAY GRAPH ---
             st.markdown("---")
             st.subheader(f"🤖 180-Day AI Price Projection ({display_currency})")
             forecast[['yhat', 'yhat_lower', 'yhat_upper']] *= fx_rate
             fig = m.plot(forecast)
-            plt.title(f"{name} 180-Day Forecast")
+            plt.title(f"{name} Growth Forecast")
             st.pyplot(fig)
             
-            st.warning("⚠️ Forecasts are probabilities. Human judgment required.")
+            # --- OUTPUT: HEALTH AUDIT ---
+            st.markdown("---")
+            st.subheader("🏥 Company Health Detail")
+            st.table(pd.DataFrame({
+                "Metric": ["ROE (Efficiency)", "Debt/Equity", "Current Ratio", "Profit Margin"],
+                "Status": [f"{health['ROE']*100:.1f}%", health['Debt'], health['Ratio'], health['Margin']],
+                "Rating": ["✅ Prime" if health['ROE'] > 0.15 else "⚠️ Low/NA", "✅ Safe" if health['Debt'] < 1.1 else "⚠️ High/NA", "✅ Liquid", "✅ Stable"]
+            }))
+
         else:
-            st.error(f"❌ Could not retrieve data for {user_query}. Check the name and try again.")
+            st.error(f"❌ Error: Found {user_query} but could not pull market data.")
