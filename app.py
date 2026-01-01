@@ -15,8 +15,8 @@ st.markdown("""
 <style>
     [data-testid="stMetricValue"] { font-size: 32px !important; font-weight: 800 !important; color: #1f77b4; }
     [data-testid="stMetricLabel"] p { font-size: 16px !important; font-weight: 600 !important; color: #333; }
-    .stop-loss-box { background-color: #fff1f1; padding: 15px; border-radius: 8px; border-left: 6px solid #ff4b4b; margin: 15px 0; }
-    .stop-loss-text { font-size: 18px; font-weight: bold; color: #d32f2f; margin: 0; }
+    .stop-loss-box { background-color: #fff1f1; padding: 20px; border-radius: 8px; border-left: 6px solid #ff4b4b; margin: 15px 0; min-height: 80px; }
+    .stop-loss-text { font-size: 20px; font-weight: bold; color: #d32f2f; margin: 0; }
     .risk-box { background-color: #fffde7; padding: 15px; border-radius: 8px; border-left: 6px solid #fbc02d; margin: 15px 0; }
     .phase-card { background-color: #f8f9fa; padding: 20px; border-radius: 12px; border: 1px solid #dee2e6; min-height: 250px; }
     .disclaimer-box { background-color: #f4f4f4; padding: 10px; border-radius: 5px; font-size: 12px; color: #666; margin-bottom: 20px;}
@@ -110,12 +110,15 @@ if st.sidebar.button("🚀 Execute Strategic Audit"):
             if points == 3:
                 mode, action_label, pct, sl_buf = "Aggressive", "🌟 HIGH CONVICTION BUY", 15, 0.90
                 risk_level = "Low-to-Moderate (Strong Fundamentals)"
+                sl_msg = f"STOP LOSS: Exit below {symbol}{conv_p * sl_buf:.2f}"
             elif points >= 1:
                 mode, action_label, pct, sl_buf = "Defensive", "🟡 ACCUMULATE / HOLD", 5, 0.85
                 risk_level = "Moderate (Mixed Indicators)"
+                sl_msg = f"STOP LOSS: Exit below {symbol}{conv_p * sl_buf:.2f}"
             else:
                 mode, action_label, pct, sl_buf = "Preservation", "🛑 AVOID / SELL", 0, 0.0
                 risk_level = "High (Weak Fundamentals/Trend)"
+                sl_msg = "🛑 STRATEGY: No entry recommended. Capital preserved in cash."
 
             # --- OUTPUT: METRICS ---
             st.subheader(f"📊 Deep Audit: {name} ({ticker}{suffix})")
@@ -131,8 +134,8 @@ if st.sidebar.button("🚀 Execute Strategic Audit"):
             st.markdown(f'<div class="risk-box"><b>⚠️ RISK ASSESSMENT:</b> {risk_level}. ' + 
                         (f"Primary risk includes high debt or negative ROI trend." if points < 2 else "Standard market volatility applies.") + '</div>', unsafe_allow_html=True)
             
-            if pct > 0:
-                st.markdown(f'<div class="stop-loss-box"><p class="stop-loss-text">STOP LOSS: Exit below {symbol}{conv_p * sl_buf:.2f}</p></div>', unsafe_allow_html=True)
+            # THE "BIG BOX" (Stop Loss)
+            st.markdown(f'<div class="stop-loss-box"><p class="stop-loss-text">{sl_msg}</p></div>', unsafe_allow_html=True)
 
             # --- OUTPUT: DETAILED PHASES ---
             st.markdown("---")
@@ -156,7 +159,6 @@ if st.sidebar.button("🚀 Execute Strategic Audit"):
             # --- OUTPUT: HEALTH TABLE (Above Chart) ---
             st.markdown("---")
             st.subheader("🏥 Company Health Detail")
-            
             st.table(pd.DataFrame({
                 "Metric": ["ROE (Efficiency)", "Debt/Equity", "Current Ratio", "Profit Margin"],
                 "Status": [f"{health['ROE']*100:.1f}%", health['Debt'], health['Ratio'], health['Margin']],
