@@ -1,9 +1,7 @@
-yfinance
+streamlit
+pandas
 prophet
-curl_cffi
-pandas==2.2.2
-matplotlib
-nltk
+pandas_datareader
 beautifulsoup4
-numpy==1.26.4
-scipy
+requests
+matplotlib
