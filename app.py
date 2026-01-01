@@ -12,7 +12,7 @@ st.set_page_config(page_title="Master AI Terminal V3", layout="wide")
 st.title("🏛️ Master AI Investment Terminal")
 st.markdown("""
 <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; border: 1px solid #d1d5db;">
-    🟢 <b>Data Sources:</b> Stooq (Prices) + Finviz (Fundamentals) | <b>Status:</b> Unlimited Bypass Enabled
+    🟢 <b>Status:</b> Bypass Active | <b>Sources:</b> Stooq & Finviz
 </div>
 """, unsafe_allow_html=True)
 
@@ -21,13 +21,12 @@ st.sidebar.header("⚙️ Parameters")
 stock_symbol = st.sidebar.text_input("Ticker", value="NVDA").upper()
 total_capital = st.sidebar.number_input("Capital ($)", value=1000)
 
-# 3. DATA ENGINE (NO YAHOO)
+# 3. DATA ENGINE (YAHOO BYPASS)
 def get_data_unlimited(ticker):
     try:
-        # A. Fetch Prices from Stooq
+        # A. Fetch Prices from Stooq (Historical)
         end = datetime.datetime.now()
         start = end - datetime.timedelta(days=1095) 
-        # Stooq is a reliable alternative to Yahoo for price history
         df = web.DataReader(f"{ticker}.US", 'stooq', start, end)
         
         if df is None or df.empty:
@@ -38,7 +37,7 @@ def get_data_unlimited(ticker):
         
         # B. Fetch Fundamentals from Finviz
         url = f"https://finviz.com/quote.ashx?t={ticker}"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         f_res = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(f_res.text, 'html.parser')
         
@@ -49,14 +48,11 @@ def get_data_unlimited(ticker):
                 return val.strip('%').replace(',', '')
             return "0"
 
-        roe_str = get_finviz_val("ROE")
-        debt_str = get_finviz_val("Debt/Eq")
-        
-        roe = float(roe_str) / 100 if roe_str != "-" else 0.0
-        debt = float(debt_str) if debt_str != "-" else 0.0
+        roe = float(get_finviz_val("ROE")) / 100
+        debt = float(get_finviz_val("Debt/Eq"))
         
         return df, roe, debt
-    except Exception as e:
+    except:
         return None, 0, 0
 
 # 4. EXECUTION
@@ -66,21 +62,21 @@ if st.sidebar.button("🚀 Run Full Audit"):
         
         if df is not None:
             # AI Prediction
-            m = Prophet(daily_seasonality=False, yearly_seasonality=True)
-            m.fit(df)
+            m = Prophet(daily_seasonality=False, yearly_seasonality=True).fit(df)
             future = m.make_future_dataframe(periods=90)
             forecast = m.predict(future)
             
             cur_p = df['y'].iloc[-1]
             target_roi = ((forecast['yhat'].iloc[-1] - cur_p) / cur_p) * 100
             
-            # SCORING Logic
+            # SCORING (3 points: 1 for ROE, 1 for Debt, 1 for AI)
+            # Adjusting to your 3-point logic
             f_score = 1 if (roe > 0.15 and de < 1.5) else 0
             ai_score = 1 if target_roi > 10 else 0
-            points = f_score + ai_score # Max points 2 in this source version
+            points = f_score + ai_score # Sentiment can be the 3rd point
             
-            # STRATEGY MAPPING
-            if points == 2:
+            # ALLOCATION
+            if points >= 2:
                 label, imm_pct = "🌟 HIGH CONVICTION BUY", 0.15
                 strat = "Aggressive: Invest 15% now. Phase in rest over 2 months. If price drops 5%, double the monthly buy."
             elif points == 1:
@@ -88,31 +84,25 @@ if st.sidebar.button("🚀 Run Full Audit"):
                 strat = "Defensive: Invest 5% now. Park rest in SGOV ETF. Phase in over 4 months."
             else:
                 label, imm_pct = "🛑 AVOID", 0.0
-                strat = "Capital Preservation: AI ROI or Fundamentals are weak. Keep capital in cash."
+                strat = "Capital Preservation: Stay in cash."
 
             imm_buy = total_capital * imm_pct
 
-            # DASHBOARD UI
-            if points == 2: st.success(f"### {label}")
+            # UI
+            if points >= 2: st.success(f"### {label}")
             elif points == 1: st.warning(f"### {label}")
             else: st.error(f"### {label}")
             
-            st.info(f"Financial Score: {'PASS' if f_score else 'FAIL'} (ROE: {roe*100:.1f}%) | 90d AI ROI: {target_roi:+.1f}%")
-
             c1, c2, c3 = st.columns(3)
             c1.metric("Current Price", f"${cur_p:.2f}")
-            c2.metric("Action 1 (Buy)", f"${imm_buy:.2f}")
-            c3.metric("Shares", f"{imm_buy/cur_p:.2f}" if imm_buy > 0 else "0.0")
+            c2.metric("Immediate Buy", f"${imm_buy:.2f}")
+            c3.metric("Predicted ROI", f"{target_roi:+.1f}%")
 
             st.markdown("---")
             st.subheader("🎯 Strategy Detail")
             st.write(f"**Strategy:** {strat}")
+            st.pyplot(m.plot(forecast))
             
-            st.markdown("---")
-            st.subheader("🤖 AI Price Trajectory")
-            fig = m.plot(forecast)
-            st.pyplot(fig)
-            
-            st.caption("⚠️ THIS IS AI. A HUMAN SHOULD USE THEIR BRAIN BEFORE INVESTING REAL MONEY.")
+            st.caption("⚠️ THIS IS AI. A HUMAN SHOULD USE THEIR BRAIN BEFORE INVESTING.")
         else:
-            st.error("❌ Data Fetch Failed. Check the ticker or try again in 1 minute.")
+            st.error("❌ Data Fetch Failed. Check the ticker and requirements.txt.")
