@@ -7,37 +7,63 @@ from bs4 import BeautifulSoup
 import matplotlib.pyplot as plt
 import datetime
 
-# 1. UI SETUP & CUSTOM BIG FONT CSS
+# 1. UI SETUP & CUSTOM REFINED CSS
 st.set_page_config(page_title="Master AI Terminal V3", layout="wide")
 
-# Custom CSS to force the Strategy metric to be huge and colored
 st.markdown("""
 <style>
-    [data-testid="stMetricValue"] { font-size: 56px !important; font-weight: 800 !important; }
-    .status-card { background-color: #f0f2f6; padding: 20px; border-radius: 10px; border-left: 8px solid #ff4b4b; }
+    /* Metric Value - Reduced font size for cleaner look */
+    [data-testid="stMetricValue"] { 
+        font-size: 28px !important; 
+        font-weight: 700 !important; 
+    }
+    /* Metric Label - Reduced font size */
+    [data-testid="stMetricLabel"] p { 
+        font-size: 14px !important; 
+        color: #555;
+    }
+    /* Stop Loss Highlight Box */
+    .stop-loss-box {
+        background-color: #fff1f1;
+        padding: 12px;
+        border-radius: 8px;
+        border-left: 6px solid #ff4b4b;
+        margin-bottom: 20px;
+    }
+    .stop-loss-text {
+        font-size: 18px;
+        font-weight: bold;
+        color: #d32f2f;
+        margin: 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 st.title("🏛️ Strategic AI Investment Architect")
 
-# 2. SIDEBAR
+# 2. SIDEBAR CONFIGURATION
 st.sidebar.header("⚙️ Configuration")
 stock_symbol = st.sidebar.text_input("Ticker", value="NVDA").upper()
 total_capital = st.sidebar.number_input("Capital ($)", value=1000)
 
-# 3. DATA ENGINE (YAHOO BYPASS)
+# 3. DATA ENGINE (STOOQ + FINVIZ BYPASS)
 def get_full_audit(ticker):
     try:
-        # Fetch Prices (Stooq)
+        # Fetch 3 Years of History
         end = datetime.datetime.now()
         start = end - datetime.timedelta(days=1095) 
         df = web.DataReader(f"{ticker}.US", 'stooq', start, end)
+        
+        if df is None or df.empty:
+            return None, None
+            
         df = df.reset_index().rename(columns={'Date': 'ds', 'Close': 'y'}).sort_values('ds')
         
-        # Fetch Stats (Finviz)
+        # Fetch Stats via Finviz
         url = f"https://finviz.com/quote.ashx?t={ticker}"
         headers = {'User-Agent': 'Mozilla/5.0'}
-        soup = BeautifulSoup(requests.get(url, headers=headers).text, 'html.parser')
+        f_res = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(f_res.text, 'html.parser')
         
         def fvz(label):
             td = soup.find('td', string=label)
@@ -50,7 +76,8 @@ def get_full_audit(ticker):
             "Profit Margin": fvz("Profit Margin") + "%"
         }
         return df, health
-    except: return None, None
+    except:
+        return None, None
 
 # 4. EXECUTION
 if st.sidebar.button("🚀 Run Full Audit"):
@@ -58,64 +85,103 @@ if st.sidebar.button("🚀 Run Full Audit"):
         df, health = get_full_audit(stock_symbol)
         
         if df is not None:
-            # AI Prediction
-            m = Prophet(daily_seasonality=False).fit(df)
-            forecast = m.predict(m.make_future_dataframe(periods=90))
+            # --- AI PREDICTION (180 DAYS) ---
+            m = Prophet(daily_seasonality=False, yearly_seasonality=True).fit(df)
+            future = m.make_future_dataframe(periods=180)
+            forecast = m.predict(future)
+            
             cur_p = df['y'].iloc[-1]
-            roi = ((forecast['yhat'].iloc[-1] - cur_p) / cur_p) * 100
+            # Calculate 180-day ROI from forecast
+            roi_180 = ((forecast['yhat'].iloc[-1] - cur_p) / cur_p) * 100
             
-            # Logic for Points (Max 3)
-            points = (1 if health['ROE'] > 0.15 else 0) + (1 if roi > 10 else 0) + (1 if health['Debt/Eq'] < 1.1 else 0)
+            # Conviction Logic (3 Point Score)
+            points = (1 if health['ROE'] > 0.15 else 0) + (1 if roi_180 > 10 else 0) + (1 if health['Debt/Eq'] < 1.1 else 0)
 
-            # --- BIG DATA POINT: STRATEGY ---
+            # --- DYNAMIC STRATEGY MAPPING ---
             if points == 3:
-                strat_mode, label, color, pct = "Aggressive", "🌟 STRONG BUY", "normal", 0.15
+                mode, label, pct = "Aggressive", "🌟 STRONG BUY", 0.15
                 risk_lvl = "Low-to-Moderate"
+                sl_price = cur_p * 0.90  # 10% Stop Loss
+                sl_msg = f"STOP LOSS: Exit immediately if price drops below ${sl_price:.2f} (10% Buffer)."
+                ui_box = st.success
             elif points >= 1:
-                strat_mode, label, color, pct = "Defensive", "🟡 ACCUMULATE", "off", 0.05
+                mode, label, pct = "Defensive", "🟡 ACCUMULATE / HOLD", 0.05
                 risk_lvl = "Moderate"
+                sl_price = cur_p * 0.85  # 15% Stop Loss
+                sl_msg = f"STOP LOSS: Exit immediately if price drops below ${sl_price:.2f} (15% Buffer)."
+                ui_box = st.warning
             else:
-                strat_mode, label, color, pct = "Capital Preservation", "🛑 AVOID", "inverse", 0.0
+                mode, label, pct = "Preservation", "🛑 AVOID / SELL", 0.0
                 risk_lvl = "High Risk"
+                sl_msg = "STOP LOSS: No entry recommended. Liquidate existing positions."
+                ui_box = st.error
 
-            st.metric(label="DASHBOARD STRATEGY", value=f"{strat_mode}: {label}")
+            imm_buy = total_capital * pct
+            staging_amt = total_capital - imm_buy
+
+            # --- DASHBOARD RENDERING ---
+            ui_box(f"### Strategy Selected: {mode}: {label}")
             
-            st.markdown("---")
-            
-            # --- PHASED ACTION ---
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Action 1: Buy", f"${total_capital*pct:.2f}", delta=f"{pct*100}% Capital")
+            # Stop Loss Statement
+            st.markdown(f'<div class="stop-loss-box"><p class="stop-loss-text">{sl_msg}</p></div>', unsafe_allow_html=True)
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Action 1: Buy", f"${imm_buy:.2f}")
             c2.metric("Company Risk", risk_lvl)
-            c3.metric("90d AI ROI", f"{roi:+.1f}%")
+            c3.metric("180-Day AI ROI", f"{roi_180:+.1f}%")
+            c4.metric("Current Price", f"${cur_p:.2f}")
 
             st.markdown("---")
             
-            # --- COMPANY HEALTH & RISK AUDIT ---
-            col_health, col_risk = st.columns(2)
-            
-            with col_health:
+            # PHASED INSTRUCTIONS
+            col_l, col_r = st.columns(2)
+            with col_l:
+                st.subheader("🚀 PHASE 1: IMMEDIATE")
+                if imm_buy > 0:
+                    st.write(f"**Action:** BUY - Invest **${imm_buy:.2f}** today.")
+                    st.write(f"Acquire approx **{imm_buy/cur_p:.2f} shares** at current market price.")
+                else:
+                    st.write("**Action:** HOLD/SELL - Do not deploy new capital.")
+
+            with col_r:
+                st.subheader("⏳ PHASE 2: STAGING")
+                if points == 3:
+                    st.write(f"**Plan:** Deploy **${staging_amt:.2f}** over the next 60 days. Double monthly buys if price dips 5%.")
+                elif points >= 1:
+                    st.write(f"**Plan:** Park **${staging_amt:.2f}** in SGOV ETF. Accumulate only on significant market pullbacks.")
+                else:
+                    st.write(f"**Plan:** Maintain **${total_capital:.2f}** in cash reserves (T-Bills/MMF).")
+
+            st.markdown("---")
+
+            # HEALTH & RISK AUDIT
+            col_h, col_ri = st.columns(2)
+            with col_h:
                 st.subheader("🏥 Company Health Detail")
-                health_data = {
-                    "Metric": ["Efficiency (ROE)", "Solvency (Debt/Eq)", "Liquidity (Current)", "Profitability"],
+                st.table(pd.DataFrame({
+                    "Metric": ["Efficiency (ROE)", "Solvency (Debt/Eq)", "Liquidity Ratio", "Profit Margin"],
                     "Status": [f"{health['ROE']*100:.1f}%", health['Debt/Eq'], health['Current Ratio'], health['Profit Margin']],
                     "Rating": ["✅ Prime" if health['ROE'] > 0.15 else "⚠️ Low",
-                               "✅ Safe" if health['Debt/Eq'] < 1.1 else "⚠️ Leveraged",
-                               "✅ Liquid", "✅ Stable"]
-                }
-                st.table(pd.DataFrame(health_data))
+                               "✅ Safe" if health['Debt/Eq'] < 1.1 else "⚠️ Leveraged", "✅ Liquid", "✅ Stable"]
+                }))
 
-            with col_risk:
-                st.subheader("⚖️ Risk Assessment")
-                st.markdown(f"""
-                - **Primary Risk:** {'Market Volatility' if points >= 2 else 'Fundamental Weakness'}
-                - **Leverage Risk:** {'Low' if health['Debt/Eq'] < 1 else 'High Debt-to-Equity Detected'}
-                - **Forecast Confidence:** {'High' if abs(roi) > 5 else 'Low Conviction'}
-                """)
+            with col_ri:
+                st.subheader("⚖️ Risk Analysis")
+                st.write(f"**Audit Conviction Score:** {int((points/3)*100)}%")
                 st.progress(points / 3)
-                st.caption(f"Audit Conviction Score: {int((points/3)*100)}%")
+                st.markdown(f"""
+                - **Leverage Risk:** {'Low' if health['Debt/Eq'] < 1.2 else 'High'}
+                - **Trend Strength:** {'Strong' if roi_180 > 15 else 'Moderate/Weak'}
+                - **Staging Priority:** {'Aggressive' if points == 3 else 'Patient'}
+                """)
 
+            # 180-DAY GRAPH
             st.markdown("---")
-            st.subheader("🤖 AI Price Forecast (90 Days)")
-            st.pyplot(m.plot(forecast))
+            st.subheader("🤖 180-Day AI Price Projection")
+            fig = m.plot(forecast)
+            plt.title(f"{stock_symbol} - 180 Day AI Trend Analysis")
+            st.pyplot(fig)
             
-            st.warning("⚠️ This AI-Generated Content Is For Informational Purposes Only And Not a Substitute For Professional Advice. No Liability For Financial Losses Due To Reliance On The Tool's Outputs.")
+            st.warning("⚠️ AI ADVISORY: Forecasts are mathematical probabilities. Human judgment is required before investing.")
+        else:
+            st.error("❌ Data Fetch Error: Please verify ticker or ensure requirements.txt includes pandas_datareader.")
