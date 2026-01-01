@@ -23,10 +23,17 @@ sia = load_essentials()
 
 def get_secure_session():
     session = requests.Session(impersonate="chrome")
+    # Randomize User Agents to avoid footprinting
+    agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ]
     session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": random.choice(agents),
         "Accept": "text/csv,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://finance.yahoo.com/quote/NVDA/history"
+        "Accept-Language": "en-US,en;q=0.5",
+        "Connection": "keep-alive"
     })
     return session
 
@@ -46,32 +53,47 @@ stock_symbol = st.sidebar.text_input("Ticker", value="NVDA").upper()
 total_capital = st.sidebar.number_input("Capital ($)", value=1000)
 target_days = st.sidebar.slider("ROI Target Window (Days)", 30, 90, 90)
 
-# 4. DATA BYPASS LOGIC
+# 4. DATA BYPASS LOGIC (FAILOVER SYSTEM)
 def fetch_data_resilient(ticker):
     sess = get_secure_session()
+    end_time = int(time.time())
+    start_time = end_time - (3 * 365 * 24 * 60 * 60)
+    
+    # Try multiple endpoints
+    endpoints = [
+        f"https://query1.finance.yahoo.com/v7/finance/download/{ticker}?period1={start_time}&period2={end_time}&interval=1d&events=history&cb={random.random()}",
+        f"https://query2.finance.yahoo.com/v7/finance/download/{ticker}?period1={start_time}&period2={end_time}&interval=1d&events=history"
+    ]
+    
+    df = None
+    for url in endpoints:
+        try:
+            res = sess.get(url, timeout=10)
+            if res.status_code == 200:
+                df = pd.read_csv(io.StringIO(res.text))
+                df['Date'] = pd.to_datetime(df['Date'])
+                break
+        except:
+            continue
+            
+    if df is None: return None, 0.12, 0.5, 0
+
+    # Stats Scrape with Failover
     try:
-        end_time = int(time.time())
-        start_time = end_time - (3 * 365 * 24 * 60 * 60)
-        csv_url = f"https://query1.finance.yahoo.com/v7/finance/download/{ticker}?period1={start_time}&period2={end_time}&interval=1d&events=history"
-        csv_res = sess.get(csv_url, timeout=15)
-        if csv_res.status_code != 200: return None, 0.12, 0.5, 0
-        df = pd.read_csv(io.StringIO(csv_res.text))
-        df['Date'] = pd.to_datetime(df['Date'])
-        
-        stats_url = f"https://finance.yahoo.com/quote/{ticker}/key-statistics"
+        stats_url = f"https://finance.yahoo.com/quote/{ticker}/key-statistics?p={ticker}"
         stats_res = sess.get(stats_url, timeout=10)
         roe_match = re.search(r'Return on Equity.*?([\d\.]+)%', stats_res.text)
         roe_val = float(roe_match.group(1))/100 if roe_match else 0.12
         debt_match = re.search(r'Total Debt/Equity.*?([\d\.]+)', stats_res.text)
         debt_val = float(debt_match.group(1))/100 if debt_match else 0.5
-        
-        return df, roe_val, debt_val, 1
     except:
-        return None, 0.12, 0.5, 0
+        roe_val, debt_val = 0.12, 0.5
+        
+    return df, roe_val, debt_val, 1
 
 # 5. EXECUTION
 if st.sidebar.button("🚀 Run Full Audit"):
-    with st.spinner("🚀 Pulling raw market data..."):
+    with st.spinner("🚀 Bypassing blocks and calculating signals..."):
         df, roe, de, sent = fetch_data_resilient(stock_symbol)
         
         if df is not None:
@@ -85,53 +107,47 @@ if st.sidebar.button("🚀 Run Full Audit"):
             target_idx = -(180 - target_days)
             target_roi = ((forecast.iloc[target_idx]['yhat'] - cur_p) / cur_p) * 100
             
-            # POINT SCORING
             f_score = 1 if (roe > 0.15 and de < 1.5) else 0
             ai_score = 1 if target_roi > 10 else 0
             points = f_score + sent + ai_score
             
-            # SIGNAL LOGIC
+            # Allocation Logic
             if points == 3:
-                label = "🌟 ACTION: HIGH CONVICTION BUY"
-                conf = "Confidence: Strong. All three indicators are positive."
-                imm_pct = 0.15
+                label, conf, imm_pct = "🌟 ACTION: HIGH CONVICTION BUY", "Strong conviction. 3/3 indicators positive.", 0.15
                 strat_text = "Aggressive Accumulation: Phase in remaining cash over 2 months. If price drops 5%, double the monthly buy."
             elif points >= 1:
-                label = "🟡 ACTION: ACCUMULATE / HOLD"
-                conf = "Confidence: Moderate. One or more indicators suggest caution."
-                imm_pct = 0.05
+                label, conf, imm_pct = "🟡 ACTION: ACCUMULATE / HOLD", "Moderate conviction. Partial indicator alignment.", 0.05
                 strat_text = "Defensive Staging: Park cash in SGOV ETF. Phase in remaining cash over 4 months."
             else:
-                label = "🛑 ACTION: AVOID"
-                conf = "Confidence: Low. AI and Fundamentals are not aligned."
-                imm_pct = 0.0
+                label, conf, imm_pct = "🛑 ACTION: AVOID", "Low conviction. Indicators suggest caution.", 0.0
                 strat_text = "Stay in Cash: Market conditions for this ticker are currently unfavorable."
             
             imm_buy = total_capital * imm_pct
 
-            # DASHBOARD UI
+            # UI Rendering
             st.markdown(f"### 📊 Strategic Report: {stock_symbol}")
             if points == 3: st.success(f"### {label}")
             elif points >= 1: st.warning(f"### {label}")
             else: st.error(f"### {label}")
+            
             st.info(conf)
 
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Points Earned", f"{points}/3")
-            c2.metric(f"{target_days}-Day ROI", f"{target_roi:+.1f}%")
-            c3.metric("Current Price", f"${cur_p:.2f}")
-            c4.metric("Immediate Buy", f"${imm_buy:.2f}")
+            c1.metric("Points", f"{points}/3")
+            c2.metric(f"{target_days}d ROI", f"{target_roi:+.1f}%")
+            c3.metric("Price", f"${cur_p:.2f}")
+            c4.metric("Action 1", f"${imm_buy:.2f}")
 
             st.markdown("---")
-            col_l, col_r = st.columns(2)
-            with col_l:
+            l_col, r_col = st.columns(2)
+            with l_col:
                 st.subheader("🚀 Phase 1: Immediate")
-                st.write(f"**Action:** Invest **${imm_buy:.2f}** today.")
+                st.write(f"Invest **${imm_buy:.2f}** today.")
                 if imm_buy > 0: st.write(f"Approx **{imm_buy/cur_p:.2f} shares**.")
                 st.error(f"🛡️ Safety Stop-Loss: ${cur_p * 0.88:.2f}")
-            with col_r:
+            with r_col:
                 st.subheader("⏳ Phase 2: Staging")
-                st.write(f"**Reserve:** **${total_capital - imm_buy:.2f}**.")
+                st.write(f"Reserve **${total_capital - imm_buy:.2f}**.")
                 st.write(f"**Strategy:** {strat_text}")
 
             st.markdown("---")
@@ -140,4 +156,4 @@ if st.sidebar.button("🚀 Run Full Audit"):
             plt.axvline(forecast.iloc[target_idx]['ds'], color='red', linestyle='--')
             st.pyplot(fig)
         else:
-            st.error("❌ Connection Timeout. Yahoo is blocking the scrape. Please click again in 10 seconds.")
+            st.error("❌ Yahoo Block Detected. Please try a different ticker or refresh.")
