@@ -17,7 +17,6 @@ user_query = st.sidebar.text_input("Enter Company", value="Nvidia")
 display_currency = st.sidebar.selectbox("Currency Output", ["USD", "EUR"])
 total_capital = st.sidebar.number_input(f"Total Capital ({display_currency})", value=1000)
 
-# CSS for dynamic colors and styling
 st.markdown("""
 <style>
     [data-testid="stMetricValue"] { font-size: 30px !important; font-weight: 800 !important; color: #1f77b4; }
@@ -26,8 +25,6 @@ st.markdown("""
     .target-box { background-color: #e3f2fd; padding: 10px; border-radius: 5px; margin-top: 5px; border-left: 4px solid #1f77b4; font-weight: bold; }
     .disclaimer-container { background-color: #333; color: white; padding: 20px; border-radius: 10px; margin-bottom: 25px; border: 2px solid red; }
     .legend-box { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 20px; }
-    
-    /* Dynamic Verdict Colors */
     .verdict-green { background-color: #e8f5e9; border-left: 8px solid #2e7d32; padding: 15px; margin-bottom: 20px; color: #1b5e20; font-weight: bold; }
     .verdict-orange { background-color: #fff3e0; border-left: 8px solid #ef6c00; padding: 15px; margin-bottom: 20px; color: #e65100; font-weight: bold; }
     .verdict-red { background-color: #ffebee; border-left: 8px solid #c62828; padding: 15px; margin-bottom: 20px; color: #b71c1c; font-weight: bold; }
@@ -38,9 +35,7 @@ st.markdown("""
 st.markdown("""
 <div class="disclaimer-container">
     <h3 style='color: #ff4b4b; margin-top: 0;'>🚨 MANDATORY LEGAL DISCLAIMER</h3>
-    <p style='font-size: 14px;'>This Strategic AI Investment Terminal is for <b>EDUCATIONAL AND INFORMATIONAL PURPOSES ONLY</b>. 
-    AI Price Projections are <b>probabilistic estimates</b>, not guarantees. Stock market investing involves significant risk of loss. 
-    Consult with a certified financial advisor before investing.</p>
+    <p style='font-size: 14px;'>Educational tool only. AI Price Projections are probabilistic estimates. <b>The "Dynamic Allocation" is a mathematical suggestion based on historical data and not financial advice.</b></p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -115,15 +110,21 @@ if st.sidebar.button("🚀 Analyze Now"):
             conv_p = float(raw_p * fx_rate)
             roi_180 = ((forecast['yhat'].iloc[-1] - raw_p) / raw_p) * 100
             
-            # STRATEGY LOGIC & DYNAMIC COLORS
+            # --- DYNAMIC ALLOCATION LOGIC ---
+            # Base points
             points = (1 if health['ROE'] > 0.15 else 0) + (1 if roi_180 > 10 else 0) + (1 if health['Debt'] < 1.1 else 0)
             
-            if points == 3: 
-                label, pct, sl_buf, risk, v_class = "🌟 HIGH CONVICTION BUY", 15, 0.90, "Low-to-Moderate", "verdict-green"
-            elif points >= 1: 
-                label, pct, sl_buf, risk, v_class = "🟡 ACCUMULATE / HOLD", 5, 0.85, "Moderate", "verdict-orange"
-            else: 
-                label, pct, sl_buf, risk, v_class = "🛑 AVOID", 0, 0.0, "High", "verdict-red"
+            if points == 3:
+                # High Potential Scaling: If ROI > 25%, boost Phase 1 to 25% allocation.
+                dynamic_pct = 25 if roi_180 > 25 else 20
+                label, sl_buf, risk, v_class = "🌟 HIGH CONVICTION BUY", 0.90, "Low-to-Moderate", "verdict-green"
+            elif points >= 1:
+                # Moderate Potential Scaling: Adjust between 5% and 12%
+                dynamic_pct = 12 if roi_180 > 5 else 7
+                label, sl_buf, risk, v_class = "🟡 ACCUMULATE / HOLD", 0.85, "Moderate", "verdict-orange"
+            else:
+                dynamic_pct = 0
+                label, sl_buf, risk, v_class = "🛑 AVOID", 0.0, "High", "verdict-red"
 
             # --- DISPLAY: HEADER & METRICS ---
             st.subheader(f"📊 {name} ({ticker}{suffix})")
@@ -133,7 +134,6 @@ if st.sidebar.button("🚀 Analyze Now"):
             m3.metric(f"Price ({display_currency})", f"{symbol}{conv_p:,.2f}")
             m4.metric("Risk Level", risk)
 
-            # --- DYNAMIC VERDICT BOX ---
             st.markdown(f'<div class="{v_class}">Strategic Verdict: {label}</div>', unsafe_allow_html=True)
             
             sl_price = conv_p * sl_buf
@@ -145,18 +145,18 @@ if st.sidebar.button("🚀 Analyze Now"):
             with p1:
                 st.markdown(f"""<div class="phase-card">
                     <h3 style='color: #1f77b4;'>🚀 PHASE 1: IMMEDIATE</h3>
-                    <p><b>Allocation:</b> {pct}% of total funds</p>
-                    <p><b>Invest Today:</b> {symbol}{float(total_capital * (pct/100)):,.2f}</p>
+                    <p style='font-size: 18px;'><b>Allocation:</b> <span style='color:#2e7d32;'>{dynamic_pct}%</span> of total funds</p>
+                    <p><b>Invest Today:</b> {symbol}{float(total_capital * (dynamic_pct/100)):,.2f}</p>
                     <hr>
-                    <p><b>Strategy:</b> Buy initial core position now. This ensures you are in the market if the AI trend continues upward immediately.</p>
+                    <p><b>Note:</b> This allocation has been <u>automatically scaled</u> based on the {roi_180:.1f}% AI growth projection and company efficiency.</p>
                 </div>""", unsafe_allow_html=True)
             
             with p2:
                 t1, t2, t3 = conv_p * 0.97, conv_p * 0.94, conv_p * 0.90 
                 st.markdown(f"""<div class="phase-card">
                     <h3 style='color: #1f77b4;'>⏳ PHASE 2: STAGED ENTRY</h3>
-                    <p><b>Allocation:</b> {100-pct}% of total funds</p>
-                    <p><b>Remaining Capital:</b> {symbol}{float(total_capital * ((100-pct)/100)):,.2f}</p>
+                    <p style='font-size: 18px;'><b>Allocation:</b> {100-dynamic_pct}% of total funds</p>
+                    <p><b>Remaining Capital:</b> {symbol}{float(total_capital * ((100-dynamic_pct)/100)):,.2f}</p>
                     <hr>
                     <p><b>Rate Options for Staging:</b></p>
                     <div class="target-box">Target A (-3% Dip): {symbol}{t1:,.2f}</div>
@@ -176,14 +176,12 @@ if st.sidebar.button("🚀 Analyze Now"):
             # --- DISPLAY: CHART & LEGEND ---
             st.markdown("---")
             st.subheader(f"🤖 AI Forecast & Technical Definitions ({display_currency})")
-            
-            # Technical Definitions Table
             st.markdown("""
             <div class="legend-box">
                 <b>📈 CHART DEFINITIONS:</b><br>
-                • <b style='color: black;'>Black Dots:</b> Actual historical price data points (where the stock has been).<br>
-                • <b style='color: #1f77b4;'>Solid Blue Line:</b> The AI's <b>"Median Prediction"</b> (the average expected path).<br>
-                • <b style='color: #a3c1e0;'>Light Blue Shade:</b> The <b>"Confidence Interval"</b> (the 80% probability zone. Price is expected to stay within this range).
+                • <b style='color: black;'>Black Dots:</b> Actual historical price data points.<br>
+                • <b style='color: #1f77b4;'>Solid Blue Line:</b> The AI's Median Prediction.<br>
+                • <b style='color: #a3c1e0;'>Light Blue Shade:</b> The Confidence Interval (80% probability zone).
             </div>
             """, unsafe_allow_html=True)
 
@@ -192,4 +190,4 @@ if st.sidebar.button("🚀 Analyze Now"):
             plt.title(f"{name} AI Projection")
             st.pyplot(fig)
         else:
-            st.error(f"❌ Error: Market data for {user_query} could not be retrieved.")
+            st.error(f"❌ Error: Could not pull data for {user_query}.")
