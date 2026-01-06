@@ -9,11 +9,11 @@ import datetime
 import yfinance as yf
 
 # 1. UI SETUP & DYNAMIC CSS
-st.set_page_config(page_title="Strategic AI Investment Architect", layout="wide")
+st.set_page_config(page_title="Strategic AI Investment Tool", layout="wide")
 
 # Sidebar for inputs
 st.sidebar.header("⚙️ Settings")
-user_query = st.sidebar.text_input("Enter Company", value="Nvidia")
+user_query = st.sidebar.text_input("Enter Tickers", value="NVDA")
 display_currency = st.sidebar.selectbox("Currency Output", ["USD", "EUR"])
 total_capital = st.sidebar.number_input(f"Total Capital ({display_currency})", value=1000)
 
