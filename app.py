@@ -7,6 +7,7 @@ import requests
 from bs4 import BeautifulSoup
 from textblob import TextBlob 
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import datetime
 import yfinance as yf
 
@@ -90,12 +91,9 @@ def calculate_technicals(df):
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
     
-    # REVISED FIBONACCI: Calculated as pullbacks from Current Price down to Recent Low
     curr_p = df['y'].iloc[-1]
-    recent_low = df['y'].tail(126).min() # 6-month support anchor
+    recent_low = df['y'].tail(126).min() 
     diff = curr_p - recent_low
-    
-    # Safety if current price is at the low
     if diff <= 0: diff = curr_p * 0.10
 
     fib_levels = {
@@ -108,7 +106,7 @@ def calculate_technicals(df):
 def get_fundamental_health(ticker, suffix):
     try:
         end = datetime.datetime.now()
-        start = end - datetime.timedelta(days=1095)
+        start = end - datetime.timedelta(days=1460) # Increased to 4 years to capture 2023-2026
         df = web.DataReader(f"{ticker}{suffix}", 'stooq', start, end)
         if df is None or df.empty: return None, None
         df = df.reset_index().rename(columns={'Date': 'ds', 'Close': 'y', 'Volume': 'vol'}).sort_values('ds')
@@ -146,23 +144,18 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             sym = "$" if display_currency == "USD" else "€"
             cur_p = df['y'].iloc[-1] * fx
             
-            # --- AI ENGINE ---
             m = Prophet(daily_seasonality=False, yearly_seasonality=True).fit(df[['ds', 'y']])
             future = m.make_future_dataframe(periods=180)
             forecast = m.predict(future)
             
-            # --- 30-DAY LOGIC ---
             row_30d = len(df) + 29
             if row_30d >= len(forecast): row_30d = -1
             
             target_p_30 = forecast['yhat'].iloc[row_30d] * fx
             move_30 = target_p_30 - cur_p
             roi_30 = (move_30 / cur_p) * 100
-            
-            # Concern 1 Fix: Auto-switch label if AI predicts a drop
             m4_label = "30d Potential Upside" if move_30 >= 0 else "30d Potential Downside"
 
-            # --- 180-DAY LOGIC FOR STRATEGY & VERDICT ---
             target_p_180 = forecast['yhat'].iloc[-1] * fx
             ai_roi_180 = ((target_p_180 - cur_p) / cur_p) * 100
             
@@ -180,10 +173,9 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             elif score >= 50: verdict, action, v_col, risk, pct = "Accumulate", "ACTION: HOLD / BUY DIPS", "v-orange", "Moderate", 10
             else: verdict, action, v_col, risk, pct = "Avoid", "ACTION: SELL / STAY AWAY", "v-red", "High", 0
 
-            # Aggressive RSI-Based Stop Loss Logic
-            if rsi > 70: sl_mult = 0.95 # Tighten stop to 5% if overbought
-            elif rsi < 30: sl_mult = 0.85 # Loosen stop to 15% if already oversold
-            else: sl_mult = 0.90 # Standard 10%
+            if rsi > 70: sl_mult = 0.95 
+            elif rsi < 30: sl_mult = 0.85 
+            else: sl_mult = 0.90 
             sl_price = cur_p * sl_mult
 
             st.subheader(f"📊 {name} Analysis ({ticker})")
@@ -196,7 +188,6 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             m5.metric("30d AI Target", f"{sym}{target_p_30:,.2f}")
 
             st.markdown(f'<div class="verdict-box {v_col}">Strategic Verdict (180d): {verdict} | {action}</div>', unsafe_allow_html=True)
-            
             st.markdown(f'<div class="stop-loss-box">🛑 AGGRESSIVE STOP LOSS (RSI-Adjusted): Exit if price drops to {sym}{sl_price:,.2f}</div>', unsafe_allow_html=True)
 
             col_l, col_r = st.columns(2)
@@ -225,11 +216,29 @@ if st.sidebar.button("🚀 Run Deep Audit"):
                 </div>""", unsafe_allow_html=True)
 
             st.markdown("---")
-            st.subheader("🤖 AI Forecast Projection (180-Day Trend)")
+            st.subheader("🤖 AI Forecast Projection (Yearly Overview & Monthly Detail)")
             forecast_plot = forecast.copy()
             forecast_plot[['yhat', 'yhat_lower', 'yhat_upper']] *= fx
-            fig1 = m.plot(forecast_plot)
-            plt.title(f"{name} 180-Day Strategic Growth Forecast")
-            st.pyplot(fig1)
+            
+            fig, ax = plt.subplots(figsize=(10, 6))
+            m.plot(forecast_plot, ax=ax)
+            
+            # PHASE LINES LOGIC
+            date_30d = forecast['ds'].iloc[row_30d]
+            date_180d = forecast['ds'].iloc[-1]
+            
+            ax.axvline(date_30d, color='orange', linestyle='--', alpha=0.7, label='30d Tactical')
+            ax.axvline(date_180d, color='green', linestyle='--', alpha=0.7, label='180d Strategic')
+            
+            ax.text(date_30d, ax.get_ylim()[1]*0.95, ' 30d Target', color='orange', fontweight='bold')
+            ax.text(date_180d, ax.get_ylim()[1]*0.95, ' 180d Target', color='green', fontweight='bold')
+
+            # CUSTOM AXIS LOGIC
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=12))
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+            plt.xticks(rotation=45)
+            
+            plt.title(f"{name} Strategic Growth Forecast")
+            st.pyplot(fig)
 
         else: st.error("Data Unavailable.")
