@@ -1,10 +1,7 @@
-streamlit
+treamlit
 pandas
-numpy
-prophet
 yfinance
-pandas_datareader
-requests
-beautifulsoup4
-textblob
+prophet
 plotly
+textblob
+beautifulsoup4
