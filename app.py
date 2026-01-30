@@ -18,7 +18,6 @@ st.markdown("""
 <style>
     [data-testid="stMetricValue"] { font-size: 26px !important; font-weight: 800 !important; color: #1f77b4; }
     
-    /* Theme-Aware Cards */
     .phase-card { background-color: #f4f6f9; color: #1a1a1a; padding: 20px; border-radius: 10px; border: 1px solid #dcdcdc; min-height: 420px; }
     .news-card { background-color: #ffffff; color: #1a1a1a; padding: 15px; border-radius: 8px; border-left: 5px solid #0288d1; margin-bottom: 10px; font-size: 14px; box-shadow: 1px 1px 5px rgba(0,0,0,0.1); }
     .fib-box { background-color: #e3f2fd; color: #0d47a1; padding: 10px; border-radius: 5px; margin-top: 5px; border-left: 4px solid #1565c0; font-family: monospace; font-weight: bold; }
@@ -41,7 +40,7 @@ st.markdown("""
 
 # 2. DISCLAIMER
 st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders for market volatility and may differ from AI trend projections.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (V8.0)")
+st.title("🏛️ Strategic AI Investment Architect (V8.1)")
 
 # 3. HELPER ENGINES
 def get_exchange_rate(from_curr, to_curr):
@@ -142,38 +141,43 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             sym = "$" if display_currency == "USD" else "€"
             cur_p = df['y'].iloc[-1] * fx
             
-            # FULL FORM MOVING AVERAGES
+            # MA Analytics
             df['MA50_Days'] = df['y'].rolling(window=50).mean()
             df['MA200_Days'] = df['y'].rolling(window=200).mean()
             
-            # PROPHET WITH STABILIZED 30D LOGIC
-            m = Prophet(daily_seasonality=False, yearly_seasonality=True, changepoint_prior_scale=0.02).fit(df[['ds', 'y']])
-            future = m.make_future_dataframe(periods=30)
+            # --- AI LOGIC (180d Range, 30d Targets) ---
+            # Adjusted prior_scales to fix the "too high" growth error
+            m = Prophet(daily_seasonality=False, 
+                        yearly_seasonality=True, 
+                        changepoint_prior_scale=0.015,
+                        seasonality_prior_scale=1.0).fit(df[['ds', 'y']])
+            
+            future = m.make_future_dataframe(periods=180) # 180 Days logic for graph
             forecast = m.predict(future)
             
-            target_p_30 = forecast['yhat'].iloc[-1] * fx
+            # Specific 30-Day extraction for UI Metrics
+            target_p_30 = forecast['yhat'].iloc[len(df) + 29] * fx
             ai_roi_30 = ((target_p_30 - cur_p) / cur_p) * 100
             
-            # CROSSOVER DETECTION & IMPACT
+            # Crossover Impact
             crossover_msg = "Market stability detected. No major technical breaches."
             cross_point = None
             for i in range(len(df)-60, len(df)):
                 prev = i-1
                 if df['MA50_Days'].iloc[prev] < df['MA200_Days'].iloc[prev] and df['MA50_Days'].iloc[i] > df['MA200_Days'].iloc[i]:
                     cross_point = (df['ds'].iloc[i], df['MA50_Days'].iloc[i], "GOLDEN")
-                    crossover_msg = "🚀 GOLDEN CROSS DETECTED: 50-Day Moving Average crossed ABOVE the 200-Day. This is a MAJOR BULLISH signal indicating a long-term uptrend."
+                    crossover_msg = "🚀 GOLDEN CROSS: 50-Day Moving Average crossed ABOVE 200-Day. Bullish long-term impact expected."
                 elif df['MA50_Days'].iloc[prev] > df['MA200_Days'].iloc[prev] and df['MA50_Days'].iloc[i] < df['MA200_Days'].iloc[i]:
                     cross_point = (df['ds'].iloc[i], df['MA50_Days'].iloc[i], "DEATH")
-                    crossover_msg = "⚠️ DEATH CROSS DETECTED: 50-Day Moving Average crossed BELOW the 200-Day. This is a MAJOR BEARISH signal indicating potential breakdown."
+                    crossover_msg = "⚠️ DEATH CROSS: 50-Day Moving Average crossed BELOW 200-Day. Bearish long-term risk detected."
 
             rsi, fibs = calculate_technicals(df)
             news_score, headlines = get_news_sentiment(ticker)
             
-            # SCORING & VERDICT
+            # Scoring & Verdict
             score = 0
             if cur_p > (df['MA200_Days'].iloc[-1] * fx): score += 30 
             if health['ROE'] > 0.15: score += 15
-            if health['PB'] < 3.0: score += 15
             if ai_roi_30 > 2: score += 40 
             elif ai_roi_30 < -1: score -= 50
             score = max(0, min(100, score))
@@ -184,7 +188,7 @@ if st.sidebar.button("🚀 Run Deep Audit"):
 
             sl_price = cur_p * (0.95 if rsi > 70 else 0.85 if rsi < 30 else 0.90)
 
-            # DISPLAY
+            # --- DISPLAY ---
             st.subheader(f"📊 {name} Analysis ({ticker})")
             st.markdown(f'<div class="impact-announcement">{crossover_msg}</div>', unsafe_allow_html=True)
             
@@ -201,9 +205,9 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             with col_l:
                 st.markdown("### 🏥 Company Health")
                 st.table(pd.DataFrame({
-                    "Metric": ["ROE", "Price-to-Book (P/B)", "Debt/Equity", "Current Ratio"],
+                    "Metric": ["ROE", "P/B Ratio", "Debt/Equity", "Current Ratio"],
                     "Status": [f"{health['ROE']*100:.1f}%", f"{health['PB']}x", health['Debt'], health['CurrentRatio']],
-                    "Rating": ["✅ Prime" if health['ROE'] > 0.15 else "⚠️ Weak", "✅ Value" if health['PB'] < 3.0 else "⚠️ Expensive", "✅ Safe", "✅ Liquid"]
+                    "Rating": ["✅ Prime" if health['ROE'] > 0.15 else "⚠️ Weak", "✅ Healthy" if health['PB'] < 3.0 else "⚠️ Overvalued", "✅ Safe", "✅ Liquid"]
                 }))
                 st.markdown("### 📰 Latest News")
                 for h in headlines: st.markdown(f'<div class="news-card">{h}</div>', unsafe_allow_html=True)
@@ -221,9 +225,10 @@ if st.sidebar.button("🚀 Run Deep Audit"):
                 </div>""", unsafe_allow_html=True)
 
             st.markdown("---")
-            st.subheader("🤖 AI Stock 30-Day Prediction & Moving Averages")
+            st.subheader("🤖 AI Stock 180-Day Projection (MA Overlays)")
             fig, ax = plt.subplots(figsize=(12, 6))
             
+            # Graph Plot Sync and Logic restoration
             forecast_plot = forecast.copy()
             forecast_plot[['yhat', 'yhat_lower', 'yhat_upper']] *= fx
             m.plot(forecast_plot, ax=ax)
@@ -231,10 +236,11 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             ax.plot(df['ds'], df['MA50_Days'] * fx, label='50-Day Moving Average', color='orange', linewidth=1.8)
             ax.plot(df['ds'], df['MA200_Days'] * fx, label='200-Day Moving Average', color='red', linewidth=1.8)
             
+            # Impact Point Marking
             if cross_point:
                 ax.scatter(cross_point[0], cross_point[1] * fx, color='gold', s=300, marker='*', label=f"{cross_point[2]} CROSS POINT", zorder=5)
             
-            ax.set_xlim([datetime.datetime.now() - datetime.timedelta(days=120), datetime.datetime.now() + datetime.timedelta(days=35)])
+            ax.set_xlim([datetime.datetime.now() - datetime.timedelta(days=180), datetime.datetime.now() + datetime.timedelta(days=180)])
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
             plt.legend(loc='upper left')
             st.pyplot(fig)
