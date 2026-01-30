@@ -2,7 +2,9 @@ streamlit
 pandas
 prophet
 pandas_datareader
-beautifulsoup4
 requests
-matplotlib
+beautifulsoup4
+textblob
 yfinance
+matplotlib
+numpy
