@@ -25,14 +25,15 @@ st.markdown("""
     .v-green { background-color: #2e7d32; }
     .v-orange { background-color: #f57c00; }
     .v-red { background-color: #c62828; }
-    .legend-box { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-top: 10px; font-size: 13px; }
+    .legend-box { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-top: 10px; font-size: 14px; line-height: 1.6; }
     .disclaimer-container { background-color: #262730; color: #aaa; padding: 15px; border-radius: 5px; font-size: 12px; margin-bottom: 20px; border: 1px solid #444; }
+    .upside-text { color: #2e7d32; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
 # 2. DISCLAIMER
 st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders for market volatility and may differ from AI trend projections.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (V5.2)")
+st.title("🏛️ Strategic AI Investment Architect (V5.3)")
 
 # 3. HELPER ENGINES
 def get_exchange_rate(from_curr, to_curr):
@@ -143,7 +144,12 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             m = Prophet(daily_seasonality=False, yearly_seasonality=True).fit(df[['ds', 'y']])
             future = m.make_future_dataframe(periods=180)
             forecast = m.predict(future)
-            ai_roi = ((forecast['yhat'].iloc[-1] - df['y'].iloc[-1]) / df['y'].iloc[-1]) * 100
+            
+            # Upside Logic
+            target_p = forecast['yhat'].iloc[-1] * fx
+            potential_upside = target_p - cur_p
+            ai_roi = (potential_upside / cur_p) * 100
+            
             rsi, fibs = calculate_technicals(df)
             news_score, headlines = get_news_sentiment(ticker)
             
@@ -154,7 +160,6 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             if news_score > 0: score += 20
             score = min(100, score)
             
-            # --- ACTION LOGIC UPDATED ---
             if score >= 75: 
                 verdict, action, v_col, risk, pct = "Strong Buy", "ACTION: BUY", "v-green", "Low", 25
             elif score >= 50: 
@@ -163,11 +168,17 @@ if st.sidebar.button("🚀 Run Deep Audit"):
                 verdict, action, v_col, risk, pct = "Avoid", "ACTION: SELL / STAY AWAY", "v-red", "High", 0
 
             st.subheader(f"📊 {name} Analysis ({ticker})")
-            m1, m2, m3, m4 = st.columns(4)
+            
+            # --- ROW 1: METRICS ---
+            m1, m2, m3, m4, m5 = st.columns(5)
             m1.metric("Conviction Score", f"{score}/100")
             m2.metric("Risk Level", risk)
-            m3.metric("AI 180d ROI", f"{ai_roi:+.1f}%")
-            m4.metric("Current Price", f"{sym}{cur_p:,.2f}")
+            m3.metric("Current Price", f"{sym}{cur_p:,.2f}")
+            m4.metric("Potential Upside", f"{sym}{potential_upside:,.2f}", delta=f"{ai_roi:.1f}%")
+            m5.metric("AI 180d Target", f"{sym}{target_p:,.2f}")
+
+            # Definition of Upside
+            st.markdown(f"ℹ️ **Potential Upside Definition:** The estimated profit per share based on the AI's 180-day forecast relative to today's price ({sym}{potential_upside:,.2f} per share).")
 
             st.markdown(f'<div class="verdict-box {v_col}">Verdict: {verdict} | {action}</div>', unsafe_allow_html=True)
             
@@ -193,22 +204,24 @@ if st.sidebar.button("🚀 Run Deep Audit"):
                     <p><b>Invest Today:</b> {sym}{total_capital*(pct/100):,.2f} ({pct}% of funds)</p>
                     <hr>
                     <h4 style="color:#1f77b4">PHASE 2: STAGED ENTRY (FIBONACCI)</h4>
-                    <p>Set <b>Limit Orders</b> at these levels to catch dips. <i>Note: Target 3 is a deep-value level for high volatility protection.</i></p>
+                    <p>Set <b>Limit Orders</b> at these levels to catch dips. <i>Note: Target 3 is a deep-value level.</i></p>
                     <div class="fib-box">🔹 Target 1 (0.382): {sym}{fibs['0.382']*fx:,.2f}</div>
                     <div class="fib-box">🔹 Target 2 (0.500): {sym}{fibs['0.500']*fx:,.2f}</div>
                     <div class="fib-box">🔹 Target 3 (0.618): {sym}{fibs['0.618']*fx:,.2f}</div>
                     <br>
-                    <small><b>Why Target 3 differs from AI:</b> The AI chart shows the "Expected" path. Fibonacci levels show the "Institutional Safety Nets" in case of a market flash-crash.</small>
+                    <small><b>Note:</b> Fibonacci targets provide a safety net for market corrections, even if AI trend is bullish.</small>
                 </div>""", unsafe_allow_html=True)
 
             st.markdown("---")
             st.subheader("🤖 AI Forecast Projection")
+            
+            # --- COLOR CODED LEGEND ---
             st.markdown("""
             <div class="legend-box">
                 <b>Chart Technical Definitions:</b><br>
-                • <b>Black Dots:</b> Historical price closings (Actual data).<br>
-                • <b>Solid Blue Line:</b> AI Median Trend (The mathematical "most likely" path).<br>
-                • <b>Light Blue Shade:</b> Uncertainty/Volatility Zone (80% probability range).
+                <span style="color:#000000;">●</span> <b>Black Dots:</b> Historical price closings (Actual data).<br>
+                <span style="color:#1f77b4; font-weight:bold;">━</span> <b>Solid Blue Line:</b> AI Median Trend (The mathematical "most likely" path).<br>
+                <span style="background-color:#d1e6f9; border:1px solid #1f77b4; padding:0 5px;">&nbsp;</span> <b>Light Blue Shade:</b> Uncertainty/Volatility Zone (80% probability range).
             </div>
             """, unsafe_allow_html=True)
             
