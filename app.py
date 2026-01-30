@@ -90,20 +90,19 @@ def calculate_technicals(df):
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
     
-    # ADJUSTED FIBONACCI: Calculated as pullbacks from the current price toward a recent low
+    # REVISED FIBONACCI: Calculated as pullbacks from Current Price down to Recent Low
     curr_p = df['y'].iloc[-1]
-    recent_low = df['y'].tail(126).min() # 6-month low anchor
+    recent_low = df['y'].tail(126).min() # 6-month support anchor
     diff = curr_p - recent_low
     
-    # If the stock is at a multi-month low, provide 5% intervals as fallback
-    if diff <= 0:
-        fib_levels = {'0.382': curr_p * 0.95, '0.500': curr_p * 0.92, '0.618': curr_p * 0.90}
-    else:
-        fib_levels = {
-            '0.382': curr_p - (diff * 0.382), 
-            '0.500': curr_p - (diff * 0.500), 
-            '0.618': curr_p - (diff * 0.618)  
-        }
+    # Safety if current price is at the low
+    if diff <= 0: diff = curr_p * 0.10
+
+    fib_levels = {
+        '0.382': curr_p - (diff * 0.382), 
+        '0.500': curr_p - (diff * 0.500), 
+        '0.618': curr_p - (diff * 0.618)  
+    }
     return df['rsi'].iloc[-1], fib_levels
 
 def get_fundamental_health(ticker, suffix):
@@ -160,8 +159,8 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             move_30 = target_p_30 - cur_p
             roi_30 = (move_30 / cur_p) * 100
             
-            # Fix Concern 1: Dynamic Label for Upside/Downside
-            metric_label = "30d Potential Upside" if move_30 >= 0 else "30d Potential Downside"
+            # Concern 1 Fix: Auto-switch label if AI predicts a drop
+            m4_label = "30d Potential Upside" if move_30 >= 0 else "30d Potential Downside"
 
             # --- 180-DAY LOGIC FOR STRATEGY & VERDICT ---
             target_p_180 = forecast['yhat'].iloc[-1] * fx
@@ -181,22 +180,24 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             elif score >= 50: verdict, action, v_col, risk, pct = "Accumulate", "ACTION: HOLD / BUY DIPS", "v-orange", "Moderate", 10
             else: verdict, action, v_col, risk, pct = "Avoid", "ACTION: SELL / STAY AWAY", "v-red", "High", 0
 
+            # Aggressive RSI-Based Stop Loss Logic
+            if rsi > 70: sl_mult = 0.95 # Tighten stop to 5% if overbought
+            elif rsi < 30: sl_mult = 0.85 # Loosen stop to 15% if already oversold
+            else: sl_mult = 0.90 # Standard 10%
+            sl_price = cur_p * sl_mult
+
             st.subheader(f"📊 {name} Analysis ({ticker})")
             
-            # --- METRICS ---
             m1, m2, m3, m4, m5 = st.columns(5)
             m1.metric("Conviction Score", f"{score}/100")
             m2.metric("Risk Level", risk)
             m3.metric("Current Price", f"{sym}{cur_p:,.2f}")
-            m4.metric(metric_label, f"{sym}{move_30:,.2f}", delta=f"{roi_30:.1f}%")
+            m4.metric(m4_label, f"{sym}{move_30:,.2f}", delta=f"{roi_30:.1f}%")
             m5.metric("30d AI Target", f"{sym}{target_p_30:,.2f}")
-
-            st.markdown(f"ℹ️ **Short-Term Metrics:** The price movement and target above represent the **30-day forecast**.")
 
             st.markdown(f'<div class="verdict-box {v_col}">Strategic Verdict (180d): {verdict} | {action}</div>', unsafe_allow_html=True)
             
-            sl_price = cur_p * 0.88 if risk == "Low" else cur_p * 0.85
-            st.markdown(f'<div class="stop-loss-box">🛑 STOP LOSS GUIDANCE: Exit if price drops to {sym}{sl_price:,.2f}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="stop-loss-box">🛑 AGGRESSIVE STOP LOSS (RSI-Adjusted): Exit if price drops to {sym}{sl_price:,.2f}</div>', unsafe_allow_html=True)
 
             col_l, col_r = st.columns(2)
             with col_l:
@@ -211,21 +212,20 @@ if st.sidebar.button("🚀 Run Deep Audit"):
                     st.markdown(f'<div class="news-card">{h}</div>', unsafe_allow_html=True)
 
             with col_r:
-                st.markdown("### ⚖️ Strategy & Buy-Limit Targets")
+                st.markdown("### ⚖️ Strategy & Fibonacci Limits")
                 st.markdown(f"""<div class="phase-card">
                     <h4 style="color:#1f77b4">PHASE 1: IMMEDIATE</h4>
                     <p><b>Invest Today:</b> {sym}{total_capital*(pct/100):,.2f} ({pct}% of funds)</p>
                     <hr>
                     <h4 style="color:#1f77b4">PHASE 2: STAGED ENTRY (FIBONACCI)</h4>
-                    <p>Set <b>Limit Orders</b> <u>below</u> current price to catch dips:</p>
-                    <div class="fib-box">🔹 Target 1 (Moderate Dip): {sym}{fibs['0.382']*fx:,.2f}</div>
-                    <div class="fib-box">🔹 Target 2 (Major Correction): {sym}{fibs['0.500']*fx:,.2f}</div>
-                    <div class="fib-box">🔹 Target 3 (Panic Bottom): {sym}{fibs['0.618']*fx:,.2f}</div>
+                    <p>Set <b>Limit Orders</b> <u>below</u> current price to catch dips.</p>
+                    <div class="fib-box">🔹 Target 1 (0.382): {sym}{fibs['0.382']*fx:,.2f}</div>
+                    <div class="fib-box">🔹 Target 2 (0.500): {sym}{fibs['0.500']*fx:,.2f}</div>
+                    <div class="fib-box">🔹 Target 3 (0.618): {sym}{fibs['0.618']*fx:,.2f}</div>
                 </div>""", unsafe_allow_html=True)
 
             st.markdown("---")
             st.subheader("🤖 AI Forecast Projection (180-Day Trend)")
-            
             forecast_plot = forecast.copy()
             forecast_plot[['yhat', 'yhat_lower', 'yhat_upper']] *= fx
             fig1 = m.plot(forecast_plot)
