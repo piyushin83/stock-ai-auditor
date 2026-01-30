@@ -21,7 +21,7 @@ st.markdown("""
     .news-card { background-color: #fff; padding: 15px; border-radius: 8px; border-left: 5px solid #0288d1; margin-bottom: 10px; font-size: 14px; }
     .fib-box { background-color: #e3f2fd; padding: 10px; border-radius: 5px; margin-top: 5px; border-left: 4px solid #1565c0; font-family: monospace; font-weight: bold; }
     .stop-loss-box { background-color: #fff1f1; border-left: 8px solid #ff4b4b; padding: 15px; margin-bottom: 20px; color: #b71c1c; font-weight: bold; }
-    .verdict-box { padding: 20px; border-radius: 8px; margin-bottom: 20px; font-weight: bold; font-size: 20px; text-align: center; color: white; }
+    .verdict-box { padding: 20px; border-radius: 8px; margin-bottom: 20px; font-weight: bold; font-size: 22px; text-align: center; color: white; text-transform: uppercase; }
     .v-green { background-color: #2e7d32; }
     .v-orange { background-color: #f57c00; }
     .v-red { background-color: #c62828; }
@@ -32,7 +32,7 @@ st.markdown("""
 
 # 2. DISCLAIMER
 st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders for market volatility and may differ from AI trend projections.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (V5.1)")
+st.title("🏛️ Strategic AI Investment Architect (V5.2)")
 
 # 3. HELPER ENGINES
 def get_exchange_rate(from_curr, to_curr):
@@ -89,7 +89,6 @@ def calculate_technicals(df):
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
     
-    # Fibonacci calculated on a 1-year lookback for institutional validity
     recent_high = df['y'].tail(252).max()
     recent_low = df['y'].tail(252).min()
     diff = recent_high - recent_low
@@ -155,9 +154,13 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             if news_score > 0: score += 20
             score = min(100, score)
             
-            if score >= 75: verdict, v_col, risk, pct = "STRONG BUY", "v-green", "Low", 25
-            elif score >= 50: verdict, v_col, risk, pct = "ACCUMULATE", "v-orange", "Moderate", 10
-            else: verdict, v_col, risk, pct = "AVOID", "v-red", "High", 0
+            # --- ACTION LOGIC UPDATED ---
+            if score >= 75: 
+                verdict, action, v_col, risk, pct = "Strong Buy", "ACTION: BUY", "v-green", "Low", 25
+            elif score >= 50: 
+                verdict, action, v_col, risk, pct = "Accumulate", "ACTION: HOLD / BUY DIPS", "v-orange", "Moderate", 10
+            else: 
+                verdict, action, v_col, risk, pct = "Avoid", "ACTION: SELL / STAY AWAY", "v-red", "High", 0
 
             st.subheader(f"📊 {name} Analysis ({ticker})")
             m1, m2, m3, m4 = st.columns(4)
@@ -166,7 +169,7 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             m3.metric("AI 180d ROI", f"{ai_roi:+.1f}%")
             m4.metric("Current Price", f"{sym}{cur_p:,.2f}")
 
-            st.markdown(f'<div class="verdict-box {v_col}">Verdict: {verdict}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="verdict-box {v_col}">Verdict: {verdict} | {action}</div>', unsafe_allow_html=True)
             
             sl_price = cur_p * 0.88 if risk == "Low" else cur_p * 0.85
             st.markdown(f'<div class="stop-loss-box">🛑 STOP LOSS GUIDANCE: Exit if price drops to {sym}{sl_price:,.2f}</div>', unsafe_allow_html=True)
