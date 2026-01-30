@@ -2,194 +2,244 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from prophet import Prophet
+import pandas_datareader.data as web
 import requests
 from bs4 import BeautifulSoup
 from textblob import TextBlob 
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import datetime
 import yfinance as yf
-import plotly.graph_objects as go
-import time
 
-# --- 1. UI & STYLING ---
-st.set_page_config(page_title="Strategic AI Architect V7.0", layout="wide")
+# 1. UI SETUP & CSS
+st.set_page_config(page_title="Strategic AI Investment Architect", layout="wide")
 
 st.markdown("""
 <style>
-    .main { background-color: #f8f9fa; }
-    [data-testid="stMetricValue"] { font-size: 32px !important; font-weight: 800 !important; color: #002b36; }
-    .verdict-card { padding: 30px; border-radius: 15px; text-align: center; color: white; font-weight: 900; font-size: 30px; margin: 20px 0; box-shadow: 0 10px 20px rgba(0,0,0,0.2); transition: 0.3s; }
-    .v-red { background: linear-gradient(145deg, #e53935, #b71c1c); border-bottom: 8px solid #7f0000; }
-    .v-orange { background: linear-gradient(145deg, #fb8c00, #ef6c00); border-bottom: 8px solid #b53d00; }
-    .v-green { background: linear-gradient(145deg, #43a047, #1b5e20); border-bottom: 8px solid #003300; }
-    .news-card { background: white; padding: 15px; border-radius: 10px; border-left: 6px solid #2196f3; margin-bottom: 10px; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
-    .tech-pill { background: #e3f2fd; padding: 10px; border-radius: 8px; font-family: monospace; font-size: 14px; border: 1px solid #bbdefb; }
+    [data-testid="stMetricValue"] { font-size: 26px !important; font-weight: 800 !important; color: #1f77b4; }
+    .phase-card { background-color: #f4f6f9; padding: 20px; border-radius: 10px; border: 1px solid #dcdcdc; min-height: 420px; }
+    .news-card { background-color: #fff; padding: 15px; border-radius: 8px; border-left: 5px solid #0288d1; margin-bottom: 10px; font-size: 14px; }
+    .fib-box { background-color: #e3f2fd; padding: 10px; border-radius: 5px; margin-top: 5px; border-left: 4px solid #1565c0; font-family: monospace; font-weight: bold; }
+    .stop-loss-box { background-color: #fff1f1; border-left: 8px solid #ff4b4b; padding: 15px; margin-bottom: 20px; color: #b71c1c; font-weight: bold; }
+    .verdict-box { padding: 20px; border-radius: 8px; margin-bottom: 20px; font-weight: bold; font-size: 22px; text-align: center; color: white; text-transform: uppercase; }
+    .v-green { background-color: #2e7d32; }
+    .v-orange { background-color: #f57c00; }
+    .v-red { background-color: #c62828; }
+    .disclaimer-container { background-color: #262730; color: #aaa; padding: 15px; border-radius: 5px; font-size: 12px; margin-bottom: 20px; border: 1px solid #444; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. DATA ENGINES (ANTI-RATE LIMIT) ---
+# 2. DISCLAIMER
+st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders for market volatility and may differ from AI trend projections.</div>', unsafe_allow_html=True)
+st.title("🏛️ Strategic AI Investment Architect (V7.2)")
 
-def get_safe_session():
-    """Creates a session with headers to prevent Yahoo Finance blocking."""
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    })
-    return session
-
-@st.cache_data(ttl=3600)
-def fetch_stock_data(ticker_str):
-    """Fetches stock data with a retry mechanism for Streamlit Cloud stability."""
-    session = get_safe_session()
-    ticker = yf.Ticker(ticker_str, session=session)
-    
-    for _ in range(3): # Retry 3 times
-        try:
-            df = ticker.history(period="5y")
-            if not df.empty:
-                return df, ticker.info
-            time.sleep(1.5)
-        except:
-            time.sleep(2)
-    return None, None
-
-def get_sentiment_score(ticker_str):
-    """Scrapes news and calculates sentiment polarity."""
+# 3. HELPER ENGINES
+def get_exchange_rate(from_curr, to_curr):
+    if from_curr == to_curr: return 1.0
     try:
-        url = f"https://finviz.com/quote.ashx?t={ticker_str}"
+        pair = f"{from_curr}{to_curr}=X"
+        data = yf.download(pair, period="1d", progress=False)
+        return float(data['Close'].iloc[-1]) if not data.empty else 1.0
+    except: return 1.0
+
+def resolve_smart_ticker(user_input):
+    user_input = user_input.strip()
+    try:
+        s = yf.Search(user_input, max_results=1)
+        if s.tickers:
+            res = s.tickers[0]
+            ticker = res['symbol']
+            name = res.get('longname', ticker)
+            exch = res.get('exchange', 'NYQ')
+            t_obj = yf.Ticker(ticker)
+            native_curr = t_obj.fast_info.get('currency', 'USD')
+            suffix_map = {'LSE': '.UK', 'GER': '.DE', 'FRA': '.DE', 'PAR': '.FR', 'AMS': '.NL', 'TSE': '.JP', 'HKG': '.HK'}
+            suffix = suffix_map.get(exch, ".US")
+            return ticker.split('.')[0], name, suffix, native_curr
+    except: pass
+    return user_input.upper(), user_input.upper(), ".US", "USD"
+
+def get_news_sentiment(ticker):
+    try:
+        url = f"https://finviz.com/quote.ashx?t={ticker}"
         headers = {'User-Agent': 'Mozilla/5.0'}
-        res = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(res.text, 'html.parser')
+        req = requests.get(url, headers=headers, timeout=5)
+        soup = BeautifulSoup(req.text, 'html.parser')
         news_table = soup.find(id='news-table')
-        if not news_table: return 0.0, ["⚠️ Sentiment Engine Unavailable"]
-        
-        headlines, scores = [], []
-        for row in news_table.findAll('tr')[:6]:
+        if not news_table: return 0, []
+        parsed_news = []
+        sentiment_score = 0
+        rows = news_table.findAll('tr')
+        for index, row in enumerate(rows[:5]):
             text = row.a.text
-            score = TextBlob(text).sentiment.polarity
-            scores.append(score)
-            icon = "🟢" if score > 0.1 else "🔴" if score < -0.1 else "⚪"
-            headlines.append(f"{icon} {text}")
-        return np.mean(scores), headlines
-    except:
-        return 0.0, ["⚠️ Feed restricted by provider."]
+            blob = TextBlob(text)
+            polarity = blob.sentiment.polarity
+            sentiment_score += polarity
+            parsed_news.append(f"{'🟢' if polarity > 0 else '🔴' if polarity < 0 else '⚪'} {text}")
+        return (sentiment_score / 5), parsed_news
+    except: return 0, ["⚠️ News Feed Unavailable"]
 
-# --- 3. CORE LOGIC ENGINE ---
-
-def process_analysis(df, info, ticker, fx, sym):
-    # Data Cleaning for Prophet
-    df_p = df.reset_index().rename(columns={'Date': 'ds', 'Close': 'y'})
-    df_p['ds'] = df_p['ds'].dt.tz_localize(None)
+def calculate_technicals(df):
+    delta = df['y'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['rsi'] = 100 - (100 / (1 + rs))
     
-    # Technical Indicators
-    df_p['MA50'] = df_p['y'].rolling(50).mean()
-    df_p['MA200'] = df_p['y'].rolling(200).mean()
-    
-    current_price = df_p['y'].iloc[-1] * fx
-    ma200_price = df_p['MA200'].iloc[-1] * fx
-    
-    # AI Forecasting
-    with st.spinner("Training AI Prediction Model..."):
-        m = Prophet(yearly_seasonality=True, daily_seasonality=False)
-        m.fit(df_p[['ds', 'y']])
-        future = m.make_future_dataframe(periods=180)
-        forecast = m.predict(future)
-        
-        target_180 = forecast['yhat'].iloc[-1] * fx
-        target_roi = ((target_180 - current_price) / current_price) * 100
+    curr_p = df['y'].iloc[-1]
+    recent_low = df['y'].tail(126).min() 
+    diff = curr_p - recent_low
+    if diff <= 0: diff = curr_p * 0.10
 
-    # Fundamentals & Sentiment
-    roe = info.get('returnOnEquity', 0)
-    sentiment, news = get_sentiment_score(ticker)
-
-    # --- UNBIASED VERDICT LOGIC ---
-    # We use a 100-point system to avoid name-based bias
-    score = 0
-    
-    # Technical Weight (35 pts): Is the long-term trend healthy?
-    if current_price > ma200_price: score += 35
-    elif current_price > (ma200_price * 0.95): score += 15 # Near support
-    else: score -= 25 # Major Trend Break (AVOID Signal)
-
-    # Forecast Weight (40 pts): What does the AI see?
-    if target_roi > 15: score += 40
-    elif target_roi > 5: score += 20
-    elif target_roi < 0: score -= 35 # Price Cratering Signal
-
-    # Health Weight (25 pts): ROE and Fundamentals
-    if roe > 0.15: score += 25
-    elif roe > 0.08: score += 10
-
-    # FINAL VERDICT ASSEMBLY
-    if score >= 75 and target_roi > 2:
-        v_label, v_color, v_desc = "STRONG BUY", "v-green", "BULLISH MOMENTUM"
-    elif score >= 40 and target_roi > -5:
-        v_label, v_color, v_desc = "HOLD / ACCUMULATE", "v-orange", "NEUTRAL / RECOVERY"
-    else:
-        v_label, v_color, v_desc = "AVOID", "v-red", "HIGH RISK / BEARISH"
-
-    return {
-        "label": v_label, "color": v_color, "desc": v_desc,
-        "price": current_price, "roi": target_roi, "target": target_180,
-        "roe": roe, "sent": sentiment, "news": news,
-        "raw": df_p, "fcst": forecast, "ma200": ma200_price
+    fib_levels = {
+        '0.382': curr_p - (diff * 0.382), 
+        '0.500': curr_p - (diff * 0.500), 
+        '0.618': curr_p - (diff * 0.618)  
     }
+    return df['rsi'].iloc[-1], fib_levels
 
-# --- 4. DASHBOARD INTERFACE ---
-
-st.title("🏛️ Strategic AI Investment Architect")
-st.markdown(f"**Current Date:** {datetime.date.today().strftime('%B %d, %Y')}")
-
-with st.sidebar:
-    st.header("⚙️ Control Panel")
-    ticker_input = st.text_input("Ticker Symbol", value="SAP").upper()
-    currency_choice = st.selectbox("Base Currency", ["USD", "EUR", "GBP"])
-    st.markdown("---")
-    # THE SUBMIT BUTTON
-    run_audit = st.button("🚀 EXECUTE DEEP AUDIT", use_container_width=True)
-
-if run_audit:
-    raw_df, stock_info = fetch_stock_data(ticker_input)
-    
-    if raw_df is not None:
-        native_curr = stock_info.get('currency', 'USD')
-        fx_val = 1.0 if native_curr == currency_choice else 0.92 # Simple fall-back FX
-        sym = {"USD":"$", "EUR":"€", "GBP":"£"}.get(currency_choice, "$")
+def get_fundamental_health(ticker, suffix):
+    try:
+        end = datetime.datetime.now()
+        start = end - datetime.timedelta(days=1825)
+        # ORIGINAL STOOQ ENGINE
+        df = web.DataReader(f"{ticker}{suffix}", 'stooq', start, end)
+        if df is None or df.empty: return None, None
+        df = df.reset_index().rename(columns={'Date': 'ds', 'Close': 'y', 'Volume': 'vol'}).sort_values('ds')
         
-        # Run the Engine
-        res = process_analysis(raw_df, stock_info, ticker_input, fx_val, sym)
+        health = {"ROE": 0, "Debt": 0, "Margin": "N/A", "CurrentRatio": "N/A"}
+        try:
+            url = f"https://finviz.com/quote.ashx?t={ticker}"
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            soup = BeautifulSoup(requests.get(url, headers=headers, timeout=5).text, 'html.parser')
+            def fvz(label):
+                td = soup.find('td', string=label)
+                return td.find_next_sibling('td').text.strip('%').replace(',', '') if td else "-"
+            health = {"ROE": float(fvz("ROE"))/100 if fvz("ROE")!="-" else 0,
+                      "Debt": float(fvz("Debt/Eq")) if fvz("Debt/Eq")!="-" else 0,
+                      "Margin": fvz("Profit Margin") + "%",
+                      "CurrentRatio": fvz("Current Ratio")}
+        except: pass
+        return df, health
+    except: return None, None
+
+# 4. SIDEBAR
+st.sidebar.header("⚙️ Configuration")
+user_query = st.sidebar.text_input("Ticker", value="SAP")
+display_currency = st.sidebar.selectbox("Currency", ["USD", "EUR"])
+total_capital = st.sidebar.number_input("Capital", value=10000)
+
+# 5. MAIN EXECUTION
+if st.sidebar.button("🚀 Run Deep Audit"):
+    with st.spinner("Processing..."):
+        ticker, name, suffix, native_curr = resolve_smart_ticker(user_query)
+        df, health = get_fundamental_health(ticker, suffix)
         
-        # Display Metrics
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Current Price", f"{sym}{res['price']:,.2f}")
-        m2.metric("180d AI Forecast", f"{sym}{res['target']:,.2f}", f"{res['roi']:.1f}%")
-        m3.metric("ROE", f"{res['roe']*100:.1f}%")
-        m4.metric("Market Sentiment", f"{res['sent']:.2f}")
+        if df is not None:
+            fx = get_exchange_rate(native_curr, display_currency)
+            sym = "$" if display_currency == "USD" else "€"
+            cur_p = df['y'].iloc[-1] * fx
+            
+            # MA Overlays
+            df['MA50'] = df['y'].rolling(window=50).mean()
+            df['MA200'] = df['y'].rolling(window=200).mean()
+            
+            # Prophet Training
+            m = Prophet(daily_seasonality=False, yearly_seasonality=True).fit(df[['ds', 'y']])
+            future = m.make_future_dataframe(periods=180)
+            forecast = m.predict(future)
+            
+            target_p_30 = forecast['yhat'].iloc[len(df) + 29] * fx
+            target_p_180 = forecast['yhat'].iloc[-1] * fx
+            
+            # --- LOGIC CORRECTION: UNBIASED ROI ---
+            ai_roi_180 = ((target_p_180 - cur_p) / cur_p) * 100
+            
+            rsi, fibs = calculate_technicals(df)
+            news_score, headlines = get_news_sentiment(ticker)
+            
+            # --- WEIGHTED SCORING MATRIX ---
+            score = 0
+            
+            # Momentum Penalty (Hard-Logic for crashes)
+            is_bearish = cur_p < (df['MA200'].iloc[-1] * fx)
+            
+            if not is_bearish: score += 30 # Reward long-term health
+            if health['ROE'] > 0.15: score += 15
+            if health['Debt'] < 1.1: score += 15
+            
+            if ai_roi_180 > 10: score += 40 
+            elif ai_roi_180 > 0: score += 10
+            else: score -= 40 # Heavy penalty for negative forecast
 
-        # Big Verdict Card
-        st.markdown(f'<div class="verdict-card {res["color"]}">{res["label"]} <br><small>{res["desc"]}</small></div>', unsafe_allow_html=True)
+            if news_score > 0: score += 10
+            score = max(0, min(100, score))
+            
+            # FINAL VERDICT
+            if ai_roi_180 < -1 or score < 40:
+                verdict, action, v_col, risk, pct = "Avoid", "ACTION: STAY AWAY / BEARISH TREND", "v-red", "High", 0
+            elif score >= 75:
+                verdict, action, v_col, risk, pct = "Strong Buy", "ACTION: BUY NOW", "v-green", "Low", 25
+            else:
+                verdict, action, v_col, risk, pct = "Accumulate", "ACTION: BUY DIPS", "v-orange", "Moderate", 10
 
-        # Plotly Charts
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=res['raw']['ds'], y=res['raw']['y']*fx_val, name="Price", line=dict(color='#002b36', width=2)))
-        fig.add_trace(go.Scatter(x=res['raw']['ds'], y=res['raw']['MA200']*fx_val, name="200-Day MA", line=dict(color='red', dash='dot')))
-        fig.add_trace(go.Scatter(x=res['fcst']['ds'].tail(180), y=res['fcst']['yhat'].tail(180)*fx_val, name="AI Path", line=dict(color='#2196f3', width=4)))
-        fig.update_layout(title=f"{ticker_input} Advanced Trend Projection", height=500, template="plotly_white")
-        st.plotly_chart(fig, use_container_width=True)
+            sl_price = cur_p * (0.95 if rsi > 70 else 0.85 if rsi < 30 else 0.90)
 
-        # Intelligence Section
-        col_news, col_tech = st.columns([2, 1])
-        with col_news:
-            st.subheader("📰 Market Intelligence")
-            for h in res['news']:
-                st.markdown(f'<div class="news-card">{h}</div>', unsafe_allow_html=True)
-        with col_tech:
-            st.subheader("📐 Technical Levels")
-            st.markdown(f'<div class="tech-pill"><b>200D MA Support:</b> {sym}{res["ma200"]:,.2f}</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="tech-pill"><b>Price Status:</b> {"OVER" if res["price"] > res["ma200"] else "UNDER"} MA200</div>', unsafe_allow_html=True)
+            # --- DISPLAY ---
+            st.subheader(f"📊 {name} Analysis ({ticker})")
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("Conviction Score", f"{score}/100")
+            m2.metric("Risk Level", risk)
+            m3.metric("Current Price", f"{sym}{cur_p:,.2f}")
+            m4.metric("180d AI Forecast", f"{ai_roi_180:.1f}%")
+            m5.metric("30d AI Target", f"{sym}{target_p_30:,.2f}")
 
-    else:
-        st.error(f"⚠️ Error: Yahoo Finance rate-limited the request. Please wait 30 seconds and click 'Execute Deep Audit' again.")
+            st.markdown(f'<div class="verdict-box {v_col}">Strategic Verdict (180d): {verdict} | {action}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="stop-loss-box">🛑 AGGRESSIVE STOP LOSS: {sym}{sl_price:,.2f}</div>', unsafe_allow_html=True)
 
-st.markdown("---")
-st.caption("Strategic Audit V7.0 | Logic Correction: Price < MA200 & Negative AI ROI = Automatic AVOID.")
+            col_l, col_r = st.columns(2)
+            with col_l:
+                st.markdown("### 🏥 Company Health")
+                st.table(pd.DataFrame({
+                    "Metric": ["ROE", "Debt/Equity", "Profit Margin", "Current Ratio"],
+                    "Status": [f"{health['ROE']*100:.1f}%", health['Debt'], health['Margin'], health['CurrentRatio']],
+                    "Rating": ["✅ Prime" if health['ROE'] > 0.15 else "⚠️ Weak", "✅ Safe" if health['Debt'] < 1.1 else "⚠️ High", "✅ Stable", "✅ Liquid"]
+                }))
+                st.markdown("### 📰 Latest News")
+                for h in headlines:
+                    st.markdown(f'<div class="news-card">{h}</div>', unsafe_allow_html=True)
+
+            with col_r:
+                st.markdown("### ⚖️ Strategy & Fibonacci Limits")
+                st.markdown(f"""<div class="phase-card">
+                    <h4 style="color:#1f77b4">PHASE 1: IMMEDIATE</h4>
+                    <p><b>Invest Today:</b> {sym}{total_capital*(pct/100):,.2f} ({pct}% of funds)</p>
+                    <hr>
+                    <h4 style="color:#1f77b4">PHASE 2: STAGED ENTRY (FIBONACCI)</h4>
+                    <div class="fib-box">🔹 Target 1 (0.382): {sym}{fibs['0.382']*fx:,.2f}</div>
+                    <div class="fib-box">🔹 Target 2 (0.500): {sym}{fibs['0.500']*fx:,.2f}</div>
+                    <div class="fib-box">🔹 Target 3 (0.618): {sym}{fibs['0.618']*fx:,.2f}</div>
+                </div>""", unsafe_allow_html=True)
+
+            st.markdown("---")
+            st.subheader("🤖 AI Stock 12-Month Prediction (MA Overlays)")
+            
+            fig, ax = plt.subplots(figsize=(12, 6))
+            forecast_plot = forecast.copy()
+            forecast_plot[['yhat', 'yhat_lower', 'yhat_upper']] *= fx
+            m.plot(forecast_plot, ax=ax)
+            
+            # MA Overlays
+            ax.plot(df['ds'], df['MA50'] * fx, label='50-Day MA', color='orange', linewidth=1.5)
+            ax.plot(df['ds'], df['MA200'] * fx, label='200-Day MA', color='red', linewidth=1.5)
+            
+            hist_view = datetime.datetime.now() - datetime.timedelta(days=180)
+            fut_view = datetime.datetime.now() + datetime.timedelta(days=180)
+            ax.set_xlim([hist_view, fut_view])
+            ax.xaxis.set_major_locator(mdates.MonthLocator())
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+            plt.xticks(rotation=45)
+            plt.legend(loc='upper left')
+            st.pyplot(fig)
+
+        else: st.error("Data Unavailable.")
