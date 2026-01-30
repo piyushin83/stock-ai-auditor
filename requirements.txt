@@ -1,10 +1,10 @@
 streamlit
 pandas
+numpy
 prophet
+yfinance
 pandas_datareader
 requests
 beautifulsoup4
 textblob
-yfinance
-matplotlib
-numpy
+plotly
