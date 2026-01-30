@@ -16,21 +16,23 @@ st.set_page_config(page_title="Strategic AI Investment Architect", layout="wide"
 st.markdown("""
 <style>
     [data-testid="stMetricValue"] { font-size: 26px !important; font-weight: 800 !important; color: #1f77b4; }
-    .phase-card { background-color: #f4f6f9; padding: 20px; border-radius: 10px; border: 1px solid #dcdcdc; min-height: 320px; }
+    .phase-card { background-color: #f4f6f9; padding: 20px; border-radius: 10px; border: 1px solid #dcdcdc; min-height: 380px; }
     .tech-card { background-color: #fff; padding: 15px; border-radius: 8px; border-left: 5px solid #2e7d32; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 10px; }
     .news-card { background-color: #fff; padding: 15px; border-radius: 8px; border-left: 5px solid #0288d1; margin-bottom: 10px; font-size: 14px; }
-    .fib-box { background-color: #e3f2fd; padding: 10px; border-radius: 5px; margin-top: 5px; border-left: 4px solid #1565c0; font-family: monospace; }
+    .fib-box { background-color: #e3f2fd; padding: 10px; border-radius: 5px; margin-top: 5px; border-left: 4px solid #1565c0; font-family: monospace; font-weight: bold; }
+    .stop-loss-box { background-color: #fff1f1; border-left: 8px solid #ff4b4b; padding: 15px; margin-bottom: 20px; color: #b71c1c; font-weight: bold; }
     .verdict-box { padding: 20px; border-radius: 8px; margin-bottom: 20px; font-weight: bold; font-size: 20px; text-align: center; color: white; }
     .v-green { background-color: #2e7d32; }
     .v-orange { background-color: #f57c00; }
     .v-red { background-color: #c62828; }
+    .legend-box { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-top: 10px; font-size: 13px; }
     .disclaimer-container { background-color: #262730; color: #aaa; padding: 15px; border-radius: 5px; font-size: 12px; margin-bottom: 20px; border: 1px solid #444; }
 </style>
 """, unsafe_allow_html=True)
 
 # 2. DISCLAIMER
-st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Signals based on probabilistic AI & Technical models. Not financial advice.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (Pro + News)")
+st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Signals based on probabilistic AI models. Not financial advice.</div>', unsafe_allow_html=True)
+st.title("🏛️ Strategic AI Investment Architect (V5)")
 
 # 3. HELPER ENGINES
 def get_exchange_rate(from_curr, to_curr):
@@ -60,39 +62,26 @@ def resolve_smart_ticker(user_input):
 
 # 4. NEWS ENGINE
 def get_news_sentiment(ticker):
-    # Scrapes Finviz News Headlines
     try:
         url = f"https://finviz.com/quote.ashx?t={ticker}"
         headers = {'User-Agent': 'Mozilla/5.0'}
         req = requests.get(url, headers=headers, timeout=5)
         soup = BeautifulSoup(req.text, 'html.parser')
         news_table = soup.find(id='news-table')
-        
         if not news_table: return 0, []
-
         parsed_news = []
         sentiment_score = 0
-        
-        # Get last 5 headlines
         rows = news_table.findAll('tr')
-        for index, row in enumerate(rows):
-            if index > 4: break # Limit to 5 latest
+        for index, row in enumerate(rows[:5]):
             text = row.a.text
-            timestamp = row.td.text.split()
-            date = timestamp[0] if len(timestamp) == 1 else "Today"
-            
-            # TextBlob Sentiment Analysis
             blob = TextBlob(text)
-            polarity = blob.sentiment.polarity # -1 to 1
+            polarity = blob.sentiment.polarity
             sentiment_score += polarity
             parsed_news.append(f"{'🟢' if polarity > 0 else '🔴' if polarity < 0 else '⚪'} {text}")
-            
-        avg_sentiment = sentiment_score / 5
-        return avg_sentiment, parsed_news
-    except:
-        return 0, ["⚠️ News Feed Unavailable"]
+        return (sentiment_score / 5), parsed_news
+    except: return 0, ["⚠️ News Feed Unavailable"]
 
-# 5. TECHNICAL ANALYSIS ENGINE
+# 5. TECHNICALS & FIBONACCI
 def calculate_technicals(df):
     delta = df['y'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -100,33 +89,15 @@ def calculate_technicals(df):
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
     
-    k = df['y'].ewm(span=12, adjust=False, min_periods=12).mean()
-    d = df['y'].ewm(span=26, adjust=False, min_periods=26).mean()
-    macd = k - d
-    signal = macd.ewm(span=9, adjust=False, min_periods=9).mean()
-    
     recent_high = df['y'].tail(180).max()
     recent_low = df['y'].tail(180).min()
     diff = recent_high - recent_low
     fib_levels = {
-        '0.5': recent_high - (diff * 0.5),
-        '0.618': recent_high - (diff * 0.618)
+        '0.382': recent_high - (diff * 0.382), # Target 1 (Moderate)
+        '0.500': recent_high - (diff * 0.500), # Target 2 (Strong)
+        '0.618': recent_high - (diff * 0.618)  # Target 3 (Golden/Aggressive)
     }
-    return df['rsi'].iloc[-1], macd.iloc[-1], signal.iloc[-1], fib_levels
-
-def get_options_sentiment(ticker):
-    try:
-        tk = yf.Ticker(ticker)
-        dates = tk.options
-        if not dates: return "N/A", 0.5
-        opt = tk.option_chain(dates[0])
-        puts = opt.puts['volume'].sum()
-        calls = opt.calls['volume'].sum()
-        if calls == 0: return "Bearish", 0.0
-        pc_ratio = puts / calls
-        sent = "Bullish" if pc_ratio < 0.7 else "Bearish" if pc_ratio > 1.0 else "Neutral"
-        return sent, pc_ratio
-    except: return "N/A", 0.5
+    return df['rsi'].iloc[-1], fib_levels
 
 def get_fundamental_health(ticker, suffix):
     try:
@@ -135,8 +106,7 @@ def get_fundamental_health(ticker, suffix):
         df = web.DataReader(f"{ticker}{suffix}", 'stooq', start, end)
         if df is None or df.empty: return None, None
         df = df.reset_index().rename(columns={'Date': 'ds', 'Close': 'y', 'Volume': 'vol'}).sort_values('ds')
-        
-        health = {"ROE": 0, "Debt": 0}
+        health = {"ROE": 0, "Debt": 0, "Margin": "N/A", "CurrentRatio": "N/A"}
         if suffix == ".US":
             try:
                 url = f"https://finviz.com/quote.ashx?t={ticker}"
@@ -146,20 +116,22 @@ def get_fundamental_health(ticker, suffix):
                     td = soup.find('td', string=label)
                     return td.find_next_sibling('td').text.strip('%').replace(',', '') if td else "-"
                 health = {"ROE": float(fvz("ROE"))/100 if fvz("ROE")!="-" else 0,
-                          "Debt": float(fvz("Debt/Eq")) if fvz("Debt/Eq")!="-" else 0}
+                          "Debt": float(fvz("Debt/Eq")) if fvz("Debt/Eq")!="-" else 0,
+                          "Margin": fvz("Profit Margin") + "%",
+                          "CurrentRatio": fvz("Current Ratio")}
             except: pass
         return df, health
     except: return None, None
 
 # 6. SIDEBAR
 st.sidebar.header("⚙️ Configuration")
-user_query = st.sidebar.text_input("Ticker / Company", value="Nvidia")
+user_query = st.sidebar.text_input("Ticker", value="NVDA")
 display_currency = st.sidebar.selectbox("Currency", ["USD", "EUR"])
 total_capital = st.sidebar.number_input("Capital", value=10000)
 
 # 7. MAIN EXECUTION
-if st.sidebar.button("🚀 Run Deep Technical & News Audit"):
-    with st.spinner("Analyzing AI Trend, Technicals, Options & LIVE News..."):
+if st.sidebar.button("🚀 Run Deep Audit"):
+    with st.spinner("Processing..."):
         ticker, name, suffix, native_curr = resolve_smart_ticker(user_query)
         df, health = get_fundamental_health(ticker, suffix)
         
@@ -168,84 +140,83 @@ if st.sidebar.button("🚀 Run Deep Technical & News Audit"):
             sym = "$" if display_currency == "USD" else "€"
             cur_p = df['y'].iloc[-1] * fx
             
-            # 1. AI
+            # AI + Technicals
             m = Prophet(daily_seasonality=False, yearly_seasonality=True).fit(df[['ds', 'y']])
             future = m.make_future_dataframe(periods=180)
             forecast = m.predict(future)
             ai_roi = ((forecast['yhat'].iloc[-1] - df['y'].iloc[-1]) / df['y'].iloc[-1]) * 100
-            
-            # 2. Techs
-            rsi, macd, signal, fibs = calculate_technicals(df)
-            
-            # 3. Sentiment (News + Options)
+            rsi, fibs = calculate_technicals(df)
             news_score, headlines = get_news_sentiment(ticker)
-            opt_sent, pc_ratio = get_options_sentiment(ticker)
             
-            # 4. SCORING (Max 100)
+            # Score & Risk
             score = 0
-            if health['ROE'] > 0.15: score += 10
-            if health['Debt'] < 1.0: score += 10
-            if ai_roi > 15: score += 20
-            elif ai_roi > 5: score += 10
-            if rsi < 70 and rsi > 30: score += 10 
-            if macd > signal: score += 10 
-            if pc_ratio < 0.8: score += 10 
+            if health['ROE'] > 0.15: score += 20
+            if health['Debt'] < 1.1: score += 20
+            if ai_roi > 10: score += 30
+            if news_score > 0: score += 20
+            score = min(100, score)
             
-            # News Impact (Can add or subtract up to 20 points)
-            if news_score > 0.1: score += 20 # Positive News
-            elif news_score < -0.1: score -= 20 # Negative News penalizes the score
-            else: score += 10 # Neutral News is better than no news
+            if score >= 75: verdict, v_col, risk, pct = "STRONG BUY", "v-green", "Low", 25
+            elif score >= 50: verdict, v_col, risk, pct = "ACCUMULATE", "v-orange", "Moderate", 10
+            else: verdict, v_col, risk, pct = "AVOID", "v-red", "High", 0
+
+            # --- DISPLAY HEADER ---
+            st.subheader(f"📊 {name} Analysis ({ticker})")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Conviction Score", f"{score}/100")
+            m2.metric("Risk Level", risk)
+            m3.metric("AI 180d ROI", f"{ai_roi:+.1f}%")
+            m4.metric("Current Price", f"{sym}{cur_p:,.2f}")
+
+            st.markdown(f'<div class="verdict-box {v_col}">Verdict: {verdict}</div>', unsafe_allow_html=True)
             
-            score = max(0, min(100, score)) # Clamp 0-100
+            # STOP LOSS GUIDANCE
+            sl_price = cur_p * 0.88 if risk == "Low" else cur_p * 0.85
+            st.markdown(f'<div class="stop-loss-box">🛑 STOP LOSS GUIDANCE: Place your exit trigger at {sym}{sl_price:,.2f} (approx. 12-15% below current).</div>', unsafe_allow_html=True)
 
-            # VERDICT
-            if score >= 75: verdict, v_col, pct = "STRONG BUY (News Validated)", "v-green", 25
-            elif score >= 50: verdict, v_col, pct = "ACCUMULATE (Monitor News)", "v-orange", 10
-            else: verdict, v_col, pct = "AVOID / HIGH RISK", "v-red", 0
-
-            # --- DISPLAY ---
-            st.subheader(f"📊 {name} ({ticker})")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Conviction", f"{score}/100")
-            c2.metric("AI 180d ROI", f"{ai_roi:+.1f}%")
-            c3.metric("News Sentiment", "Positive" if news_score > 0 else "Negative")
-            c4.metric("Current Price", f"{sym}{cur_p:,.2f}")
-
-            st.markdown(f'<div class="verdict-box {v_col}">{verdict}</div>', unsafe_allow_html=True)
-            
-            col_tech, col_phase = st.columns([1, 1])
-            with col_tech:
-                st.markdown("### 📰 Market Sentiment & Headlines")
-                st.write(f"**News Analysis:** {'Bullish' if news_score > 0 else 'Bearish'}. Latest headlines analyzed:")
+            # --- TWO COLUMN ANALYSIS ---
+            col_l, col_r = st.columns(2)
+            with col_l:
+                st.markdown("### 📰 Market News Sentiment")
                 for h in headlines:
                     st.markdown(f'<div class="news-card">{h}</div>', unsafe_allow_html=True)
                 
-                st.markdown("### 🛠️ Technical Signals")
-                st.markdown(f"""<div class="tech-card">
-                    <b>RSI (14):</b> {rsi:.1f}<br>
-                    <b>MACD:</b> {"🟢 Bullish" if macd > signal else "🔴 Bearish"}<br>
-                    <b>Options P/C Ratio:</b> {pc_ratio:.2f} ({opt_sent})
-                </div>""", unsafe_allow_html=True)
+                st.markdown("### 🏥 Company Health Details")
+                st.table(pd.DataFrame({
+                    "Metric": ["ROE", "Debt/Equity", "Profit Margin", "Current Ratio"],
+                    "Status": [f"{health['ROE']*100:.1f}%", health['Debt'], health['Margin'], health['CurrentRatio']],
+                    "Rating": ["✅ Prime" if health['ROE'] > 0.15 else "⚠️ Weak", "✅ Safe" if health['Debt'] < 1.1 else "⚠️ High", "✅ Stable", "✅ Liquid"]
+                }))
 
-            with col_phase:
-                st.markdown("### ⚖️ Strategy")
-                buy_amt = total_capital * (pct/100)
+            with col_r:
+                st.markdown("### ⚖️ Strategy & Fibonacci Limits")
                 st.markdown(f"""<div class="phase-card">
-                    <h4>PHASE 1: IMMEDIATE</h4>
-                    <p><b>Allocation:</b> <span style="font-size:20px; color:#2e7d32">{pct}%</span></p>
-                    <p><b>Value:</b> {sym}{buy_amt:,.2f}</p>
+                    <h4 style="color:#1f77b4">PHASE 1: IMMEDIATE</h4>
+                    <p><b>Invest Today:</b> {sym}{total_capital*(pct/100):,.2f} ({pct}% of funds)</p>
                     <hr>
-                    <h4>PHASE 2: FIBONACCI LIMITS</h4>
-                    <p>Set buy orders at these technical support levels:</p>
-                    <div class="fib-box">🎯 0.50 Level: {sym}{fibs['0.5']*fx:,.2f}</div>
-                    <div class="fib-box">🏆 0.618 Level: {sym}{fibs['0.618']*fx:,.2f}</div>
+                    <h4 style="color:#1f77b4">PHASE 2: STAGED ENTRY (FIBONACCI)</h4>
+                    <p>Fibonacci limits are "Golden Ratios" where stocks historically find support. Invest the remaining {(100-pct)}% at these targets:</p>
+                    <div class="fib-box">🔹 Target 1 (0.382): {sym}{fibs['0.382']*fx:,.2f}</div>
+                    <div class="fib-box">🔹 Target 2 (0.500): {sym}{fibs['0.500']*fx:,.2f}</div>
+                    <div class="fib-box">🔹 Target 3 (0.618): {sym}{fibs['0.618']*fx:,.2f}</div>
+                    <br><small><i>Target 3 is the "Golden Ratio" - the strongest institutional buy zone.</i></small>
                 </div>""", unsafe_allow_html=True)
 
+            # --- AI CHART & DEFINITIONS ---
             st.markdown("---")
-            st.subheader("🤖 AI Forecast")
+            st.subheader("🤖 AI Forecast Projection")
+            st.markdown("""
+            <div class="legend-box">
+                <b>Chart Technical Definitions:</b><br>
+                • <b>Black Dots:</b> Historical price closings (Actual data).<br>
+                • <b>Solid Blue Line:</b> AI Median Trend (The mathematical "most likely" path).<br>
+                • <b>Light Blue Shade:</b> Uncertainty/Volatility Zone (80% probability range).
+            </div>
+            """, unsafe_allow_html=True)
+            
             forecast[['yhat', 'yhat_lower', 'yhat_upper']] *= fx
             fig1 = m.plot(forecast)
-            plt.title(f"{name} AI Forecast")
+            plt.title(f"{name} Growth Forecast")
             st.pyplot(fig1)
 
         else: st.error("Data Unavailable.")
