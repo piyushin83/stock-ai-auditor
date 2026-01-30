@@ -146,13 +146,16 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             future = m.make_future_dataframe(periods=180)
             forecast = m.predict(future)
             
-            # 30-Day Sub-Logic (For Metric Box Only)
-            forecast_30_row = forecast.iloc[len(df) + 29] if len(forecast) > (len(df)+29) else forecast.iloc[-1]
-            target_p_30 = forecast_30_row['yhat'] * fx
+            # --- 30-DAY LOGIC FOR HEADER METRICS ONLY ---
+            # Locating the row approximately 30 days after the last historical date
+            row_30d = len(df) + 29
+            if row_30d >= len(forecast): row_30d = -1
+            
+            target_p_30 = forecast['yhat'].iloc[row_30d] * fx
             upside_30 = target_p_30 - cur_p
             roi_30 = (upside_30 / cur_p) * 100
 
-            # 180-Day Logic (For Strategic Analysis & Verdict)
+            # --- 180-DAY LOGIC FOR STRATEGY & VERDICT ---
             target_p_180 = forecast['yhat'].iloc[-1] * fx
             ai_roi_180 = ((target_p_180 - cur_p) / cur_p) * 100
             
@@ -172,7 +175,7 @@ if st.sidebar.button("🚀 Run Deep Audit"):
 
             st.subheader(f"📊 {name} Analysis ({ticker})")
             
-            # --- ROW 1: METRICS (UPSCALE 30-DAY WINDOW FOR FIRST TWO) ---
+            # --- METRIC SUB-BOX: 30-DAY VIEW ONLY ---
             m1, m2, m3, m4, m5 = st.columns(5)
             m1.metric("Conviction Score", f"{score}/100")
             m2.metric("Risk Level", risk)
@@ -181,7 +184,7 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             m4.metric("30d Potential Upside", f"{sym}{upside_30:,.2f}", delta=f"{roi_30:.1f}%")
             m5.metric("30d AI Target", f"{sym}{target_p_30:,.2f}")
 
-            st.markdown(f"ℹ️ **Short-Term View:** Potential Upside and AI Target are showing a **30-day outlook**. All strategic ratings and the chart below maintain a **180-day forecast**.")
+            st.markdown(f"ℹ️ **Short-Term Metrics:** The Upside and Target metrics above represent the **30-day forecast**. Strategic analysis and charts below are based on the full **180-day trend**.")
 
             st.markdown(f'<div class="verdict-box {v_col}">Strategic Verdict (180d): {verdict} | {action}</div>', unsafe_allow_html=True)
             
@@ -225,11 +228,11 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             </div>
             """, unsafe_allow_html=True)
             
-            # Plot remains 180 days
+            # Plot remains 180 days for technical depth
             forecast_plot = forecast.copy()
             forecast_plot[['yhat', 'yhat_lower', 'yhat_upper']] *= fx
             fig1 = m.plot(forecast_plot)
-            plt.title(f"{name} 180-Day Growth Forecast")
+            plt.title(f"{name} 180-Day Strategic Growth Forecast")
             st.pyplot(fig1)
 
         else: st.error("Data Unavailable.")
