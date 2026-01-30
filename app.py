@@ -1,40 +1,47 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 from prophet import Prophet
 import pandas_datareader.data as web
 import requests
 from bs4 import BeautifulSoup
-from textblob import TextBlob 
 import matplotlib.pyplot as plt
 import datetime
 import yfinance as yf
 
-# 1. UI SETUP & CSS
+# 1. UI SETUP & DYNAMIC CSS
 st.set_page_config(page_title="Strategic AI Investment Architect", layout="wide")
+
+# Sidebar for inputs
+st.sidebar.header("⚙️ Settings")
+user_query = st.sidebar.text_input("Enter Company", value="Nvidia")
+display_currency = st.sidebar.selectbox("Currency Output", ["USD", "EUR"])
+total_capital = st.sidebar.number_input(f"Total Capital ({display_currency})", value=1000)
 
 st.markdown("""
 <style>
-    [data-testid="stMetricValue"] { font-size: 26px !important; font-weight: 800 !important; color: #1f77b4; }
-    .phase-card { background-color: #f4f6f9; padding: 20px; border-radius: 10px; border: 1px solid #dcdcdc; min-height: 420px; }
-    .tech-card { background-color: #fff; padding: 15px; border-radius: 8px; border-left: 5px solid #2e7d32; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 10px; }
-    .news-card { background-color: #fff; padding: 15px; border-radius: 8px; border-left: 5px solid #0288d1; margin-bottom: 10px; font-size: 14px; }
-    .fib-box { background-color: #e3f2fd; padding: 10px; border-radius: 5px; margin-top: 5px; border-left: 4px solid #1565c0; font-family: monospace; font-weight: bold; }
-    .stop-loss-box { background-color: #fff1f1; border-left: 8px solid #ff4b4b; padding: 15px; margin-bottom: 20px; color: #b71c1c; font-weight: bold; }
-    .verdict-box { padding: 20px; border-radius: 8px; margin-bottom: 20px; font-weight: bold; font-size: 20px; text-align: center; color: white; }
-    .v-green { background-color: #2e7d32; }
-    .v-orange { background-color: #f57c00; }
-    .v-red { background-color: #c62828; }
-    .legend-box { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-top: 10px; font-size: 13px; }
-    .disclaimer-container { background-color: #262730; color: #aaa; padding: 15px; border-radius: 5px; font-size: 12px; margin-bottom: 20px; border: 1px solid #444; }
+    [data-testid="stMetricValue"] { font-size: 30px !important; font-weight: 800 !important; color: #1f77b4; }
+    .stop-loss-box { background-color: #fff1f1; border-left: 8px solid #ff4b4b; padding: 15px; margin-bottom: 10px; }
+    .phase-card { background-color: #f0f2f6; padding: 20px; border-radius: 12px; border: 1px solid #d1d5db; min-height: 320px; }
+    .target-box { background-color: #e3f2fd; padding: 10px; border-radius: 5px; margin-top: 5px; border-left: 4px solid #1f77b4; font-weight: bold; }
+    .disclaimer-container { background-color: #333; color: white; padding: 20px; border-radius: 10px; margin-bottom: 25px; border: 2px solid red; }
+    .legend-box { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 20px; }
+    .verdict-green { background-color: #e8f5e9; border-left: 8px solid #2e7d32; padding: 15px; margin-bottom: 20px; color: #1b5e20; font-weight: bold; }
+    .verdict-orange { background-color: #fff3e0; border-left: 8px solid #ef6c00; padding: 15px; margin-bottom: 20px; color: #e65100; font-weight: bold; }
+    .verdict-red { background-color: #ffebee; border-left: 8px solid #c62828; padding: 15px; margin-bottom: 20px; color: #b71c1c; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
-# 2. DISCLAIMER
-st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders for market volatility and may differ from AI trend projections.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (V5.1)")
+# 2. MANDATORY LEGAL DISCLAIMER
+st.markdown("""
+<div class="disclaimer-container">
+    <h3 style='color: #ff4b4b; margin-top: 0;'>🚨 MANDATORY LEGAL DISCLAIMER</h3>
+    <p style='font-size: 14px;'>Educational tool only. AI Price Projections are probabilistic estimates. <b>The "Dynamic Allocation" is a mathematical suggestion based on historical data and not financial advice.</b></p>
+</div>
+""", unsafe_allow_html=True)
 
-# 3. HELPER ENGINES
+st.title("🏛️ Strategic AI Investment Architect")
+
+# 3. ENGINES
 def get_exchange_rate(from_curr, to_curr):
     if from_curr == to_curr: return 1.0
     try:
@@ -60,54 +67,15 @@ def resolve_smart_ticker(user_input):
     except: pass
     return user_input.upper(), user_input.upper(), ".US", "USD"
 
-# 4. NEWS ENGINE
-def get_news_sentiment(ticker):
-    try:
-        url = f"https://finviz.com/quote.ashx?t={ticker}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        req = requests.get(url, headers=headers, timeout=5)
-        soup = BeautifulSoup(req.text, 'html.parser')
-        news_table = soup.find(id='news-table')
-        if not news_table: return 0, []
-        parsed_news = []
-        sentiment_score = 0
-        rows = news_table.findAll('tr')
-        for index, row in enumerate(rows[:5]):
-            text = row.a.text
-            blob = TextBlob(text)
-            polarity = blob.sentiment.polarity
-            sentiment_score += polarity
-            parsed_news.append(f"{'🟢' if polarity > 0 else '🔴' if polarity < 0 else '⚪'} {text}")
-        return (sentiment_score / 5), parsed_news
-    except: return 0, ["⚠️ News Feed Unavailable"]
-
-# 5. TECHNICALS & FIBONACCI
-def calculate_technicals(df):
-    delta = df['y'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df['rsi'] = 100 - (100 / (1 + rs))
-    
-    # Fibonacci calculated on a 1-year lookback for institutional validity
-    recent_high = df['y'].tail(252).max()
-    recent_low = df['y'].tail(252).min()
-    diff = recent_high - recent_low
-    fib_levels = {
-        '0.382': recent_high - (diff * 0.382), 
-        '0.500': recent_high - (diff * 0.500), 
-        '0.618': recent_high - (diff * 0.618)  
-    }
-    return df['rsi'].iloc[-1], fib_levels
-
-def get_fundamental_health(ticker, suffix):
+def get_audit_data(ticker, suffix):
     try:
         end = datetime.datetime.now()
-        start = end - datetime.timedelta(days=1095)
+        start = end - datetime.timedelta(days=1095) 
         df = web.DataReader(f"{ticker}{suffix}", 'stooq', start, end)
         if df is None or df.empty: return None, None
-        df = df.reset_index().rename(columns={'Date': 'ds', 'Close': 'y', 'Volume': 'vol'}).sort_values('ds')
-        health = {"ROE": 0, "Debt": 0, "Margin": "N/A", "CurrentRatio": "N/A"}
+        df = df.reset_index().rename(columns={'Date': 'ds', 'Close': 'y'}).sort_values('ds')
+        
+        health = {"ROE": 0.0, "Debt": 0.0, "Ratio": "N/A", "Margin": "N/A"}
         if suffix == ".US":
             try:
                 url = f"https://finviz.com/quote.ashx?t={ticker}"
@@ -118,100 +86,108 @@ def get_fundamental_health(ticker, suffix):
                     return td.find_next_sibling('td').text.strip('%').replace(',', '') if td else "-"
                 health = {"ROE": float(fvz("ROE"))/100 if fvz("ROE")!="-" else 0,
                           "Debt": float(fvz("Debt/Eq")) if fvz("Debt/Eq")!="-" else 0,
-                          "Margin": fvz("Profit Margin") + "%",
-                          "CurrentRatio": fvz("Current Ratio")}
+                          "Ratio": fvz("Current Ratio"), "Margin": fvz("Profit Margin") + "%"}
             except: pass
         return df, health
     except: return None, None
 
-# 6. SIDEBAR
-st.sidebar.header("⚙️ Configuration")
-user_query = st.sidebar.text_input("Ticker", value="NVDA")
-display_currency = st.sidebar.selectbox("Currency", ["USD", "EUR"])
-total_capital = st.sidebar.number_input("Capital", value=10000)
-
-# 7. MAIN EXECUTION
-if st.sidebar.button("🚀 Run Deep Audit"):
-    with st.spinner("Processing..."):
+# 4. EXECUTION
+if st.sidebar.button("🚀 Analyze Now"):
+    with st.spinner(f"📡 Processing {user_query}..."):
         ticker, name, suffix, native_curr = resolve_smart_ticker(user_query)
-        df, health = get_fundamental_health(ticker, suffix)
+        df, health = get_audit_data(ticker, suffix)
         
         if df is not None:
-            fx = get_exchange_rate(native_curr, display_currency)
-            sym = "$" if display_currency == "USD" else "€"
-            cur_p = df['y'].iloc[-1] * fx
+            rate_val = get_exchange_rate(native_curr, display_currency)
+            fx_rate = float(rate_val) if rate_val else 1.0
+            symbol = "$" if display_currency == "USD" else "€"
             
-            m = Prophet(daily_seasonality=False, yearly_seasonality=True).fit(df[['ds', 'y']])
+            m = Prophet(daily_seasonality=False, yearly_seasonality=True).fit(df)
             future = m.make_future_dataframe(periods=180)
             forecast = m.predict(future)
-            ai_roi = ((forecast['yhat'].iloc[-1] - df['y'].iloc[-1]) / df['y'].iloc[-1]) * 100
-            rsi, fibs = calculate_technicals(df)
-            news_score, headlines = get_news_sentiment(ticker)
             
-            score = 0
-            if health['ROE'] > 0.15: score += 20
-            if health['Debt'] < 1.1: score += 20
-            if ai_roi > 10: score += 30
-            if news_score > 0: score += 20
-            score = min(100, score)
+            raw_p = float(df['y'].iloc[-1])
+            conv_p = float(raw_p * fx_rate)
+            roi_180 = ((forecast['yhat'].iloc[-1] - raw_p) / raw_p) * 100
             
-            if score >= 75: verdict, v_col, risk, pct = "STRONG BUY", "v-green", "Low", 25
-            elif score >= 50: verdict, v_col, risk, pct = "ACCUMULATE", "v-orange", "Moderate", 10
-            else: verdict, v_col, risk, pct = "AVOID", "v-red", "High", 0
+            # --- DYNAMIC ALLOCATION LOGIC ---
+            # Base points
+            points = (1 if health['ROE'] > 0.15 else 0) + (1 if roi_180 > 10 else 0) + (1 if health['Debt'] < 1.1 else 0)
+            
+            if points == 3:
+                # High Potential Scaling: If ROI > 25%, boost Phase 1 to 25% allocation.
+                dynamic_pct = 25 if roi_180 > 25 else 20
+                label, sl_buf, risk, v_class = "🌟 HIGH CONVICTION BUY", 0.90, "Low-to-Moderate", "verdict-green"
+            elif points >= 1:
+                # Moderate Potential Scaling: Adjust between 5% and 12%
+                dynamic_pct = 12 if roi_180 > 5 else 7
+                label, sl_buf, risk, v_class = "🟡 ACCUMULATE / HOLD", 0.85, "Moderate", "verdict-orange"
+            else:
+                dynamic_pct = 0
+                label, sl_buf, risk, v_class = "🛑 AVOID", 0.0, "High", "verdict-red"
 
-            st.subheader(f"📊 {name} Analysis ({ticker})")
+            # --- DISPLAY: HEADER & METRICS ---
+            st.subheader(f"📊 {name} ({ticker}{suffix})")
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Conviction Score", f"{score}/100")
-            m2.metric("Risk Level", risk)
-            m3.metric("AI 180d ROI", f"{ai_roi:+.1f}%")
-            m4.metric("Current Price", f"{sym}{cur_p:,.2f}")
+            m1.metric("Conviction Score", f"{int((points/3)*100)}/100")
+            m2.metric("AI 180D ROI", f"{roi_180:+.1f}%")
+            m3.metric(f"Price ({display_currency})", f"{symbol}{conv_p:,.2f}")
+            m4.metric("Risk Level", risk)
 
-            st.markdown(f'<div class="verdict-box {v_col}">Verdict: {verdict}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="{v_class}">Strategic Verdict: {label}</div>', unsafe_allow_html=True)
             
-            sl_price = cur_p * 0.88 if risk == "Low" else cur_p * 0.85
-            st.markdown(f'<div class="stop-loss-box">🛑 STOP LOSS GUIDANCE: Exit if price drops to {sym}{sl_price:,.2f}</div>', unsafe_allow_html=True)
+            sl_price = conv_p * sl_buf
+            st.markdown(f'<div class="stop-loss-box"><b>🛑 STOP LOSS:</b> Exit if price drops below {symbol}{sl_price:,.2f}</div>', unsafe_allow_html=True)
 
-            col_l, col_r = st.columns(2)
-            with col_l:
-                st.markdown("### 🏥 Company Health Details")
-                st.table(pd.DataFrame({
-                    "Metric": ["ROE", "Debt/Equity", "Profit Margin", "Current Ratio"],
-                    "Status": [f"{health['ROE']*100:.1f}%", health['Debt'], health['Margin'], health['CurrentRatio']],
-                    "Rating": ["✅ Prime" if health['ROE'] > 0.15 else "⚠️ Weak", "✅ Safe" if health['Debt'] < 1.1 else "⚠️ High", "✅ Stable", "✅ Liquid"]
-                }))
-                st.markdown("### 📰 Latest News Headlines")
-                for h in headlines:
-                    st.markdown(f'<div class="news-card">{h}</div>', unsafe_allow_html=True)
-
-            with col_r:
-                st.markdown("### ⚖️ Strategy & Fibonacci Limits")
+            # --- DISPLAY: PHASED STRATEGY ---
+            st.markdown("---")
+            p1, p2 = st.columns(2)
+            with p1:
                 st.markdown(f"""<div class="phase-card">
-                    <h4 style="color:#1f77b4">PHASE 1: IMMEDIATE</h4>
-                    <p><b>Invest Today:</b> {sym}{total_capital*(pct/100):,.2f} ({pct}% of funds)</p>
+                    <h3 style='color: #1f77b4;'>🚀 PHASE 1: IMMEDIATE</h3>
+                    <p style='font-size: 18px;'><b>Allocation:</b> <span style='color:#2e7d32;'>{dynamic_pct}%</span> of total funds</p>
+                    <p><b>Invest Today:</b> {symbol}{float(total_capital * (dynamic_pct/100)):,.2f}</p>
                     <hr>
-                    <h4 style="color:#1f77b4">PHASE 2: STAGED ENTRY (FIBONACCI)</h4>
-                    <p>Set <b>Limit Orders</b> at these levels to catch dips. <i>Note: Target 3 is a deep-value level for high volatility protection.</i></p>
-                    <div class="fib-box">🔹 Target 1 (0.382): {sym}{fibs['0.382']*fx:,.2f}</div>
-                    <div class="fib-box">🔹 Target 2 (0.500): {sym}{fibs['0.500']*fx:,.2f}</div>
-                    <div class="fib-box">🔹 Target 3 (0.618): {sym}{fibs['0.618']*fx:,.2f}</div>
-                    <br>
-                    <small><b>Why Target 3 differs from AI:</b> The AI chart shows the "Expected" path. Fibonacci levels show the "Institutional Safety Nets" in case of a market flash-crash.</small>
+                    <p><b>Note:</b> This allocation has been <u>automatically scaled</u> based on the {roi_180:.1f}% AI growth projection and company efficiency.</p>
+                </div>""", unsafe_allow_html=True)
+            
+            with p2:
+                t1, t2, t3 = conv_p * 0.97, conv_p * 0.94, conv_p * 0.90 
+                st.markdown(f"""<div class="phase-card">
+                    <h3 style='color: #1f77b4;'>⏳ PHASE 2: STAGED ENTRY</h3>
+                    <p style='font-size: 18px;'><b>Allocation:</b> {100-dynamic_pct}% of total funds</p>
+                    <p><b>Remaining Capital:</b> {symbol}{float(total_capital * ((100-dynamic_pct)/100)):,.2f}</p>
+                    <hr>
+                    <p><b>Rate Options for Staging:</b></p>
+                    <div class="target-box">Target A (-3% Dip): {symbol}{t1:,.2f}</div>
+                    <div class="target-box">Target B (-6% Dip): {symbol}{t2:,.2f}</div>
+                    <div class="target-box">Target C (-10% Dip): {symbol}{t3:,.2f}</div>
                 </div>""", unsafe_allow_html=True)
 
+            # --- DISPLAY: HEALTH ---
             st.markdown("---")
-            st.subheader("🤖 AI Forecast Projection")
+            st.subheader("🏥 Company Health Detail")
+            st.table(pd.DataFrame({
+                "Metric": ["ROE (Efficiency)", "Debt/Equity", "Current Ratio", "Profit Margin"],
+                "Status": [f"{health['ROE']*100:.1f}%", health['Debt'], health['Ratio'], health['Margin']],
+                "Rating": ["✅ Prime" if health['ROE'] > 0.15 else "⚠️ Low", "✅ Safe" if health['Debt'] < 1.1 else "⚠️ High", "✅ Liquid", "✅ Stable"]
+            }))
+
+            # --- DISPLAY: CHART & LEGEND ---
+            st.markdown("---")
+            st.subheader(f"🤖 AI Forecast & Technical Definitions ({display_currency})")
             st.markdown("""
             <div class="legend-box">
-                <b>Chart Technical Definitions:</b><br>
-                • <b>Black Dots:</b> Historical price closings (Actual data).<br>
-                • <b>Solid Blue Line:</b> AI Median Trend (The mathematical "most likely" path).<br>
-                • <b>Light Blue Shade:</b> Uncertainty/Volatility Zone (80% probability range).
+                <b>📈 CHART DEFINITIONS:</b><br>
+                • <b style='color: black;'>Black Dots:</b> Actual historical price data points.<br>
+                • <b style='color: #1f77b4;'>Solid Blue Line:</b> The AI's Median Prediction.<br>
+                • <b style='color: #a3c1e0;'>Light Blue Shade:</b> The Confidence Interval (80% probability zone).
             </div>
             """, unsafe_allow_html=True)
-            
-            forecast[['yhat', 'yhat_lower', 'yhat_upper']] *= fx
-            fig1 = m.plot(forecast)
-            plt.title(f"{name} Growth Forecast")
-            st.pyplot(fig1)
 
-        else: st.error("Data Unavailable.")
+            forecast[['yhat', 'yhat_lower', 'yhat_upper']] *= fx_rate
+            fig = m.plot(forecast)
+            plt.title(f"{name} AI Projection")
+            st.pyplot(fig)
+        else:
+            st.error(f"❌ Error: Could not pull data for {user_query}.")
