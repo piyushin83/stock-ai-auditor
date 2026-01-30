@@ -17,7 +17,6 @@ st.markdown("""
 <style>
     [data-testid="stMetricValue"] { font-size: 26px !important; font-weight: 800 !important; color: #1f77b4; }
     .phase-card { background-color: #f4f6f9; padding: 20px; border-radius: 10px; border: 1px solid #dcdcdc; min-height: 420px; }
-    .tech-card { background-color: #fff; padding: 15px; border-radius: 8px; border-left: 5px solid #2e7d32; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 10px; }
     .news-card { background-color: #fff; padding: 15px; border-radius: 8px; border-left: 5px solid #0288d1; margin-bottom: 10px; font-size: 14px; }
     .fib-box { background-color: #e3f2fd; padding: 10px; border-radius: 5px; margin-top: 5px; border-left: 4px solid #1565c0; font-family: monospace; font-weight: bold; }
     .stop-loss-box { background-color: #fff1f1; border-left: 8px solid #ff4b4b; padding: 15px; margin-bottom: 20px; color: #b71c1c; font-weight: bold; }
@@ -27,13 +26,12 @@ st.markdown("""
     .v-red { background-color: #c62828; }
     .legend-box { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-top: 10px; font-size: 14px; line-height: 1.6; }
     .disclaimer-container { background-color: #262730; color: #aaa; padding: 15px; border-radius: 5px; font-size: 12px; margin-bottom: 20px; border: 1px solid #444; }
-    .upside-text { color: #2e7d32; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
 # 2. DISCLAIMER
-st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders for market volatility and may differ from AI trend projections.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (V5.4)")
+st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are buy-limit orders for volatility.</div>', unsafe_allow_html=True)
+st.title("🏛️ Strategic AI Investment Architect (V5.5)")
 
 # 3. HELPER ENGINES
 def get_exchange_rate(from_curr, to_curr):
@@ -82,7 +80,7 @@ def get_news_sentiment(ticker):
         return (sentiment_score / 5), parsed_news
     except: return 0, ["⚠️ News Feed Unavailable"]
 
-# 5. TECHNICALS & FIBONACCI
+# 5. TECHNICALS & UPDATED FIBONACCI
 def calculate_technicals(df):
     delta = df['y'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -90,13 +88,15 @@ def calculate_technicals(df):
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
     
-    recent_high = df['y'].tail(252).max()
-    recent_low = df['y'].tail(252).min()
-    diff = recent_high - recent_low
+    # Logic: Dips are calculated from the current price down to the recent low
+    current_price = df['y'].iloc[-1]
+    recent_low = df['y'].tail(126).min() # 6 month low
+    diff = current_price - recent_low
+    
     fib_levels = {
-        '0.382': recent_high - (diff * 0.382), 
-        '0.500': recent_high - (diff * 0.500), 
-        '0.618': recent_high - (diff * 0.618)  
+        '0.382': current_price - (diff * 0.382) if diff > 0 else current_price * 0.95, 
+        '0.500': current_price - (diff * 0.500) if diff > 0 else current_price * 0.90, 
+        '0.618': current_price - (diff * 0.618) if diff > 0 else current_price * 0.85 
     }
     return df['rsi'].iloc[-1], fib_levels
 
@@ -141,21 +141,20 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             sym = "$" if display_currency == "USD" else "€"
             cur_p = df['y'].iloc[-1] * fx
             
-            # --- AI ENGINE ---
             m = Prophet(daily_seasonality=False, yearly_seasonality=True).fit(df[['ds', 'y']])
             future = m.make_future_dataframe(periods=180)
             forecast = m.predict(future)
             
-            # --- 30-DAY LOGIC FOR HEADER METRICS ONLY ---
-            # Locating the row approximately 30 days after the last historical date
+            # --- 30-DAY LOGIC ---
             row_30d = len(df) + 29
-            if row_30d >= len(forecast): row_30d = -1
-            
             target_p_30 = forecast['yhat'].iloc[row_30d] * fx
-            upside_30 = target_p_30 - cur_p
-            roi_30 = (upside_30 / cur_p) * 100
+            move_30 = target_p_30 - cur_p
+            roi_30 = (move_30 / cur_p) * 100
+            
+            # Dynamic labeling for Drops
+            label_30 = "30d Potential Upside" if move_30 >= 0 else "30d Potential Downside"
 
-            # --- 180-DAY LOGIC FOR STRATEGY & VERDICT ---
+            # --- 180-DAY LOGIC ---
             target_p_180 = forecast['yhat'].iloc[-1] * fx
             ai_roi_180 = ((target_p_180 - cur_p) / cur_p) * 100
             
@@ -175,64 +174,46 @@ if st.sidebar.button("🚀 Run Deep Audit"):
 
             st.subheader(f"📊 {name} Analysis ({ticker})")
             
-            # --- METRIC SUB-BOX: 30-DAY VIEW ONLY ---
             m1, m2, m3, m4, m5 = st.columns(5)
             m1.metric("Conviction Score", f"{score}/100")
             m2.metric("Risk Level", risk)
             m3.metric("Current Price", f"{sym}{cur_p:,.2f}")
-            # Potential Upside & Target adjusted to 30 days as requested
-            m4.metric("30d Potential Upside", f"{sym}{upside_30:,.2f}", delta=f"{roi_30:.1f}%")
+            m4.metric(label_30, f"{sym}{move_30:,.2f}", delta=f"{roi_30:.1f}%")
             m5.metric("30d AI Target", f"{sym}{target_p_30:,.2f}")
-
-            st.markdown(f"ℹ️ **Short-Term Metrics:** The Upside and Target metrics above represent the **30-day forecast**. Strategic analysis and charts below are based on the full **180-day trend**.")
 
             st.markdown(f'<div class="verdict-box {v_col}">Strategic Verdict (180d): {verdict} | {action}</div>', unsafe_allow_html=True)
             
             sl_price = cur_p * 0.88 if risk == "Low" else cur_p * 0.85
-            st.markdown(f'<div class="stop-loss-box">🛑 STOP LOSS GUIDANCE: Exit if price drops to {sym}{sl_price:,.2f}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="stop-loss-box">🛑 STOP LOSS: Exit if price drops to {sym}{sl_price:,.2f}</div>', unsafe_allow_html=True)
 
             col_l, col_r = st.columns(2)
             with col_l:
-                st.markdown("### 🏥 Company Health Details")
+                st.markdown("### 🏥 Company Health")
                 st.table(pd.DataFrame({
                     "Metric": ["ROE", "Debt/Equity", "Profit Margin", "Current Ratio"],
                     "Status": [f"{health['ROE']*100:.1f}%", health['Debt'], health['Margin'], health['CurrentRatio']],
                     "Rating": ["✅ Prime" if health['ROE'] > 0.15 else "⚠️ Weak", "✅ Safe" if health['Debt'] < 1.1 else "⚠️ High", "✅ Stable", "✅ Liquid"]
                 }))
-                st.markdown("### 📰 Latest News Headlines")
-                for h in headlines:
-                    st.markdown(f'<div class="news-card">{h}</div>', unsafe_allow_html=True)
 
             with col_r:
-                st.markdown("### ⚖️ Strategy & Fibonacci Limits")
+                st.markdown("### ⚖️ Fibonacci Staged Entry (Buy the Dips)")
                 st.markdown(f"""<div class="phase-card">
                     <h4 style="color:#1f77b4">PHASE 1: IMMEDIATE</h4>
                     <p><b>Invest Today:</b> {sym}{total_capital*(pct/100):,.2f} ({pct}% of funds)</p>
                     <hr>
-                    <h4 style="color:#1f77b4">PHASE 2: STAGED ENTRY (FIBONACCI)</h4>
-                    <p>Set <b>Limit Orders</b> at these levels to catch dips.</p>
-                    <div class="fib-box">🔹 Target 1 (0.382): {sym}{fibs['0.382']*fx:,.2f}</div>
-                    <div class="fib-box">🔹 Target 2 (0.500): {sym}{fibs['0.500']*fx:,.2f}</div>
-                    <div class="fib-box">🔹 Target 3 (0.618): {sym}{fibs['0.618']*fx:,.2f}</div>
+                    <h4 style="color:#1f77b4">PHASE 2: LIMIT ORDERS</h4>
+                    <p>Place orders <b>below</b> current price to catch volatility:</p>
+                    <div class="fib-box">🔹 Dip Target 1: {sym}{fibs['0.382']*fx:,.2f}</div>
+                    <div class="fib-box">🔹 Dip Target 2: {sym}{fibs['0.500']*fx:,.2f}</div>
+                    <div class="fib-box">🔹 Deep Value: {sym}{fibs['0.618']*fx:,.2f}</div>
                 </div>""", unsafe_allow_html=True)
 
             st.markdown("---")
             st.subheader("🤖 AI Forecast Projection (180-Day Trend)")
-            
-            st.markdown("""
-            <div class="legend-box">
-                <b>Chart Legend:</b><br>
-                <span style="color:#000000;">●</span> <b>Black Dots:</b> Historical Price.<br>
-                <span style="color:#1f77b4; font-weight:bold;">━</span> <b>Solid Blue Line:</b> AI Median Path.<br>
-                <span style="background-color:#d1e6f9; border:1px solid #1f77b4; padding:0 5px;">&nbsp;</span> <b>Light Blue Shade:</b> Volatility Zone (80% probability).
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Plot remains 180 days for technical depth
             forecast_plot = forecast.copy()
             forecast_plot[['yhat', 'yhat_lower', 'yhat_upper']] *= fx
             fig1 = m.plot(forecast_plot)
-            plt.title(f"{name} 180-Day Strategic Growth Forecast")
+            plt.title(f"{name} 180-Day Forecast")
             st.pyplot(fig1)
 
         else: st.error("Data Unavailable.")
