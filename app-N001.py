@@ -6,182 +6,188 @@ import requests
 from bs4 import BeautifulSoup
 import matplotlib.pyplot as plt
 import datetime
+import yfinance as yf
 
-# 1. UI SETUP & CUSTOM REFINED CSS
-st.set_page_config(page_title="Master AI Terminal V3", layout="wide")
+# 1. UI SETUP & DYNAMIC CSS
+st.set_page_config(page_title="Strategic AI Investment Architect", layout="wide")
+
+# Sidebar for inputs
+st.sidebar.header("⚙️ Settings")
+user_query = st.sidebar.text_input("Enter Company", value="Nvidia")
+display_currency = st.sidebar.selectbox("Currency Output", ["USD", "EUR"])
+total_capital = st.sidebar.number_input(f"Total Capital ({display_currency})", value=1000)
 
 st.markdown("""
 <style>
-    /* Metric Value - Reduced font size for cleaner look */
-    [data-testid="stMetricValue"] { 
-        font-size: 28px !important; 
-        font-weight: 700 !important; 
-    }
-    /* Metric Label - Reduced font size */
-    [data-testid="stMetricLabel"] p { 
-        font-size: 14px !important; 
-        color: #555;
-    }
-    /* Stop Loss Highlight Box */
-    .stop-loss-box {
-        background-color: #fff1f1;
-        padding: 12px;
-        border-radius: 8px;
-        border-left: 6px solid #ff4b4b;
-        margin-bottom: 20px;
-    }
-    .stop-loss-text {
-        font-size: 18px;
-        font-weight: bold;
-        color: #d32f2f;
-        margin: 0;
-    }
+    [data-testid="stMetricValue"] { font-size: 30px !important; font-weight: 800 !important; color: #1f77b4; }
+    .stop-loss-box { background-color: #fff1f1; border-left: 8px solid #ff4b4b; padding: 15px; margin-bottom: 10px; }
+    .phase-card { background-color: #f0f2f6; padding: 20px; border-radius: 12px; border: 1px solid #d1d5db; min-height: 320px; }
+    .target-box { background-color: #e3f2fd; padding: 10px; border-radius: 5px; margin-top: 5px; border-left: 4px solid #1f77b4; font-weight: bold; }
+    .disclaimer-container { background-color: #333; color: white; padding: 20px; border-radius: 10px; margin-bottom: 25px; border: 2px solid red; }
+    .legend-box { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 20px; }
+    .verdict-green { background-color: #e8f5e9; border-left: 8px solid #2e7d32; padding: 15px; margin-bottom: 20px; color: #1b5e20; font-weight: bold; }
+    .verdict-orange { background-color: #fff3e0; border-left: 8px solid #ef6c00; padding: 15px; margin-bottom: 20px; color: #e65100; font-weight: bold; }
+    .verdict-red { background-color: #ffebee; border-left: 8px solid #c62828; padding: 15px; margin-bottom: 20px; color: #b71c1c; font-weight: bold; }
 </style>
+""", unsafe_allow_html=True)
+
+# 2. MANDATORY LEGAL DISCLAIMER
+st.markdown("""
+<div class="disclaimer-container">
+    <h3 style='color: #ff4b4b; margin-top: 0;'>🚨 MANDATORY LEGAL DISCLAIMER</h3>
+    <p style='font-size: 14px;'>Educational tool only. AI Price Projections are probabilistic estimates. <b>The "Dynamic Allocation" is a mathematical suggestion based on historical data and not financial advice.</b></p>
+</div>
 """, unsafe_allow_html=True)
 
 st.title("🏛️ Strategic AI Investment Architect")
 
-# 2. SIDEBAR CONFIGURATION
-st.sidebar.header("⚙️ Configuration")
-stock_symbol = st.sidebar.text_input("Ticker", value="NVDA").upper()
-total_capital = st.sidebar.number_input("Capital ($)", value=1000)
-
-# 3. DATA ENGINE (STOOQ + FINVIZ BYPASS)
-def get_full_audit(ticker):
+# 3. ENGINES
+def get_exchange_rate(from_curr, to_curr):
+    if from_curr == to_curr: return 1.0
     try:
-        # Fetch 3 Years of History
+        pair = f"{from_curr}{to_curr}=X"
+        data = yf.download(pair, period="1d", progress=False)
+        return float(data['Close'].iloc[-1]) if not data.empty else 1.0
+    except: return 1.0
+
+def resolve_smart_ticker(user_input):
+    user_input = user_input.strip()
+    try:
+        s = yf.Search(user_input, max_results=1)
+        if s.tickers:
+            res = s.tickers[0]
+            ticker = res['symbol']
+            name = res.get('longname', ticker)
+            exch = res.get('exchange', 'NYQ')
+            t_obj = yf.Ticker(ticker)
+            native_curr = t_obj.fast_info.get('currency', 'USD')
+            suffix_map = {'LSE': '.UK', 'GER': '.DE', 'FRA': '.DE', 'PAR': '.FR', 'AMS': '.NL', 'TSE': '.JP', 'HKG': '.HK'}
+            suffix = suffix_map.get(exch, ".US")
+            return ticker.split('.')[0], name, suffix, native_curr
+    except: pass
+    return user_input.upper(), user_input.upper(), ".US", "USD"
+
+def get_audit_data(ticker, suffix):
+    try:
         end = datetime.datetime.now()
         start = end - datetime.timedelta(days=1095) 
-        df = web.DataReader(f"{ticker}.US", 'stooq', start, end)
-        
-        if df is None or df.empty:
-            return None, None
-            
+        df = web.DataReader(f"{ticker}{suffix}", 'stooq', start, end)
+        if df is None or df.empty: return None, None
         df = df.reset_index().rename(columns={'Date': 'ds', 'Close': 'y'}).sort_values('ds')
         
-        # Fetch Stats via Finviz
-        url = f"https://finviz.com/quote.ashx?t={ticker}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        f_res = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(f_res.text, 'html.parser')
-        
-        def fvz(label):
-            td = soup.find('td', string=label)
-            return td.find_next_sibling('td').text.strip('%').replace(',', '') if td else "0"
-
-        health = {
-            "ROE": float(fvz("ROE")) / 100 if fvz("ROE") != "-" else 0,
-            "Debt/Eq": float(fvz("Debt/Eq")) if fvz("Debt/Eq") != "-" else 0,
-            "Current Ratio": fvz("Current Ratio"),
-            "Profit Margin": fvz("Profit Margin") + "%"
-        }
+        health = {"ROE": 0.0, "Debt": 0.0, "Ratio": "N/A", "Margin": "N/A"}
+        if suffix == ".US":
+            try:
+                url = f"https://finviz.com/quote.ashx?t={ticker}"
+                headers = {'User-Agent': 'Mozilla/5.0'}
+                soup = BeautifulSoup(requests.get(url, headers=headers, timeout=5).text, 'html.parser')
+                def fvz(label):
+                    td = soup.find('td', string=label)
+                    return td.find_next_sibling('td').text.strip('%').replace(',', '') if td else "-"
+                health = {"ROE": float(fvz("ROE"))/100 if fvz("ROE")!="-" else 0,
+                          "Debt": float(fvz("Debt/Eq")) if fvz("Debt/Eq")!="-" else 0,
+                          "Ratio": fvz("Current Ratio"), "Margin": fvz("Profit Margin") + "%"}
+            except: pass
         return df, health
-    except:
-        return None, None
+    except: return None, None
 
 # 4. EXECUTION
-if st.sidebar.button("🚀 Run Full Audit"):
-    with st.spinner(f"📡 Auditing {stock_symbol}..."):
-        df, health = get_full_audit(stock_symbol)
+if st.sidebar.button("🚀 Analyze Now"):
+    with st.spinner(f"📡 Processing {user_query}..."):
+        ticker, name, suffix, native_curr = resolve_smart_ticker(user_query)
+        df, health = get_audit_data(ticker, suffix)
         
         if df is not None:
-            # --- AI PREDICTION (180 DAYS) ---
+            rate_val = get_exchange_rate(native_curr, display_currency)
+            fx_rate = float(rate_val) if rate_val else 1.0
+            symbol = "$" if display_currency == "USD" else "€"
+            
             m = Prophet(daily_seasonality=False, yearly_seasonality=True).fit(df)
             future = m.make_future_dataframe(periods=180)
             forecast = m.predict(future)
             
-            cur_p = df['y'].iloc[-1]
-            # Calculate 180-day ROI from forecast
-            roi_180 = ((forecast['yhat'].iloc[-1] - cur_p) / cur_p) * 100
+            raw_p = float(df['y'].iloc[-1])
+            conv_p = float(raw_p * fx_rate)
+            roi_180 = ((forecast['yhat'].iloc[-1] - raw_p) / raw_p) * 100
             
-            # Conviction Logic (3 Point Score)
-            points = (1 if health['ROE'] > 0.15 else 0) + (1 if roi_180 > 10 else 0) + (1 if health['Debt/Eq'] < 1.1 else 0)
-
-            # --- DYNAMIC STRATEGY MAPPING ---
+            # --- DYNAMIC ALLOCATION LOGIC ---
+            # Base points
+            points = (1 if health['ROE'] > 0.15 else 0) + (1 if roi_180 > 10 else 0) + (1 if health['Debt'] < 1.1 else 0)
+            
             if points == 3:
-                mode, label, pct = "Aggressive", "🌟 STRONG BUY", 0.15
-                risk_lvl = "Low-to-Moderate"
-                sl_price = cur_p * 0.90  # 10% Stop Loss
-                sl_msg = f"STOP LOSS: Exit immediately if price drops below ${sl_price:.2f} (10% Buffer)."
-                ui_box = st.success
+                # High Potential Scaling: If ROI > 25%, boost Phase 1 to 25% allocation.
+                dynamic_pct = 25 if roi_180 > 25 else 20
+                label, sl_buf, risk, v_class = "🌟 HIGH CONVICTION BUY", 0.90, "Low-to-Moderate", "verdict-green"
             elif points >= 1:
-                mode, label, pct = "Defensive", "🟡 ACCUMULATE / HOLD", 0.05
-                risk_lvl = "Moderate"
-                sl_price = cur_p * 0.85  # 15% Stop Loss
-                sl_msg = f"STOP LOSS: Exit immediately if price drops below ${sl_price:.2f} (15% Buffer)."
-                ui_box = st.warning
+                # Moderate Potential Scaling: Adjust between 5% and 12%
+                dynamic_pct = 12 if roi_180 > 5 else 7
+                label, sl_buf, risk, v_class = "🟡 ACCUMULATE / HOLD", 0.85, "Moderate", "verdict-orange"
             else:
-                mode, label, pct = "Preservation", "🛑 AVOID / SELL", 0.0
-                risk_lvl = "High Risk"
-                sl_msg = "STOP LOSS: No entry recommended. Liquidate existing positions."
-                ui_box = st.error
+                dynamic_pct = 0
+                label, sl_buf, risk, v_class = "🛑 AVOID", 0.0, "High", "verdict-red"
 
-            imm_buy = total_capital * pct
-            staging_amt = total_capital - imm_buy
+            # --- DISPLAY: HEADER & METRICS ---
+            st.subheader(f"📊 {name} ({ticker}{suffix})")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Conviction Score", f"{int((points/3)*100)}/100")
+            m2.metric("AI 180D ROI", f"{roi_180:+.1f}%")
+            m3.metric(f"Price ({display_currency})", f"{symbol}{conv_p:,.2f}")
+            m4.metric("Risk Level", risk)
 
-            # --- DASHBOARD RENDERING ---
-            ui_box(f"### Strategy Selected: {mode}: {label}")
+            st.markdown(f'<div class="{v_class}">Strategic Verdict: {label}</div>', unsafe_allow_html=True)
             
-            # Stop Loss Statement
-            st.markdown(f'<div class="stop-loss-box"><p class="stop-loss-text">{sl_msg}</p></div>', unsafe_allow_html=True)
+            sl_price = conv_p * sl_buf
+            st.markdown(f'<div class="stop-loss-box"><b>🛑 STOP LOSS:</b> Exit if price drops below {symbol}{sl_price:,.2f}</div>', unsafe_allow_html=True)
 
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Action 1: Buy", f"${imm_buy:.2f}")
-            c2.metric("Company Risk", risk_lvl)
-            c3.metric("180-Day AI ROI", f"{roi_180:+.1f}%")
-            c4.metric("Current Price", f"${cur_p:.2f}")
-
+            # --- DISPLAY: PHASED STRATEGY ---
             st.markdown("---")
+            p1, p2 = st.columns(2)
+            with p1:
+                st.markdown(f"""<div class="phase-card">
+                    <h3 style='color: #1f77b4;'>🚀 PHASE 1: IMMEDIATE</h3>
+                    <p style='font-size: 18px;'><b>Allocation:</b> <span style='color:#2e7d32;'>{dynamic_pct}%</span> of total funds</p>
+                    <p><b>Invest Today:</b> {symbol}{float(total_capital * (dynamic_pct/100)):,.2f}</p>
+                    <hr>
+                    <p><b>Note:</b> This allocation has been <u>automatically scaled</u> based on the {roi_180:.1f}% AI growth projection and company efficiency.</p>
+                </div>""", unsafe_allow_html=True)
             
-            # PHASED INSTRUCTIONS
-            col_l, col_r = st.columns(2)
-            with col_l:
-                st.subheader("🚀 PHASE 1: IMMEDIATE")
-                if imm_buy > 0:
-                    st.write(f"**Action:** BUY - Invest **${imm_buy:.2f}** today.")
-                    st.write(f"Acquire approx **{imm_buy/cur_p:.2f} shares** at current market price.")
-                else:
-                    st.write("**Action:** HOLD/SELL - Do not deploy new capital.")
+            with p2:
+                t1, t2, t3 = conv_p * 0.97, conv_p * 0.94, conv_p * 0.90 
+                st.markdown(f"""<div class="phase-card">
+                    <h3 style='color: #1f77b4;'>⏳ PHASE 2: STAGED ENTRY</h3>
+                    <p style='font-size: 18px;'><b>Allocation:</b> {100-dynamic_pct}% of total funds</p>
+                    <p><b>Remaining Capital:</b> {symbol}{float(total_capital * ((100-dynamic_pct)/100)):,.2f}</p>
+                    <hr>
+                    <p><b>Rate Options for Staging:</b></p>
+                    <div class="target-box">Target A (-3% Dip): {symbol}{t1:,.2f}</div>
+                    <div class="target-box">Target B (-6% Dip): {symbol}{t2:,.2f}</div>
+                    <div class="target-box">Target C (-10% Dip): {symbol}{t3:,.2f}</div>
+                </div>""", unsafe_allow_html=True)
 
-            with col_r:
-                st.subheader("⏳ PHASE 2: STAGING")
-                if points == 3:
-                    st.write(f"**Plan:** Deploy **${staging_amt:.2f}** over the next 60 days. Double monthly buys if price dips 5%.")
-                elif points >= 1:
-                    st.write(f"**Plan:** Park **${staging_amt:.2f}** in SGOV ETF. Accumulate only on significant market pullbacks.")
-                else:
-                    st.write(f"**Plan:** Maintain **${total_capital:.2f}** in cash reserves (T-Bills/MMF).")
-
+            # --- DISPLAY: HEALTH ---
             st.markdown("---")
+            st.subheader("🏥 Company Health Detail")
+            st.table(pd.DataFrame({
+                "Metric": ["ROE (Efficiency)", "Debt/Equity", "Current Ratio", "Profit Margin"],
+                "Status": [f"{health['ROE']*100:.1f}%", health['Debt'], health['Ratio'], health['Margin']],
+                "Rating": ["✅ Prime" if health['ROE'] > 0.15 else "⚠️ Low", "✅ Safe" if health['Debt'] < 1.1 else "⚠️ High", "✅ Liquid", "✅ Stable"]
+            }))
 
-            # HEALTH & RISK AUDIT
-            col_h, col_ri = st.columns(2)
-            with col_h:
-                st.subheader("🏥 Company Health Detail")
-                st.table(pd.DataFrame({
-                    "Metric": ["Efficiency (ROE)", "Solvency (Debt/Eq)", "Liquidity Ratio", "Profit Margin"],
-                    "Status": [f"{health['ROE']*100:.1f}%", health['Debt/Eq'], health['Current Ratio'], health['Profit Margin']],
-                    "Rating": ["✅ Prime" if health['ROE'] > 0.15 else "⚠️ Low",
-                               "✅ Safe" if health['Debt/Eq'] < 1.1 else "⚠️ Leveraged", "✅ Liquid", "✅ Stable"]
-                }))
-
-            with col_ri:
-                st.subheader("⚖️ Risk Analysis")
-                st.write(f"**Audit Conviction Score:** {int((points/3)*100)}%")
-                st.progress(points / 3)
-                st.markdown(f"""
-                - **Leverage Risk:** {'Low' if health['Debt/Eq'] < 1.2 else 'High'}
-                - **Trend Strength:** {'Strong' if roi_180 > 15 else 'Moderate/Weak'}
-                - **Staging Priority:** {'Aggressive' if points == 3 else 'Patient'}
-                """)
-
-            # 180-DAY GRAPH
+            # --- DISPLAY: CHART & LEGEND ---
             st.markdown("---")
-            st.subheader("🤖 180-Day AI Price Projection")
+            st.subheader(f"🤖 AI Forecast & Technical Definitions ({display_currency})")
+            st.markdown("""
+            <div class="legend-box">
+                <b>📈 CHART DEFINITIONS:</b><br>
+                • <b style='color: black;'>Black Dots:</b> Actual historical price data points.<br>
+                • <b style='color: #1f77b4;'>Solid Blue Line:</b> The AI's Median Prediction.<br>
+                • <b style='color: #a3c1e0;'>Light Blue Shade:</b> The Confidence Interval (80% probability zone).
+            </div>
+            """, unsafe_allow_html=True)
+
+            forecast[['yhat', 'yhat_lower', 'yhat_upper']] *= fx_rate
             fig = m.plot(forecast)
-            plt.title(f"{stock_symbol} - 180 Day AI Trend Analysis")
+            plt.title(f"{name} AI Projection")
             st.pyplot(fig)
-            
-            st.warning("⚠️ AI ADVISORY: Forecasts are mathematical probabilities. Human judgment is required before investing.")
         else:
-            st.error("❌ Data Fetch Error: Please verify ticker or ensure requirements.txt includes pandas_datareader.")
+            st.error(f"❌ Error: Could not pull data for {user_query}.")
