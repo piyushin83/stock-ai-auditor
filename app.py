@@ -15,8 +15,9 @@ st.set_page_config(page_title="Strategic AI Investment Architect", layout="wide"
 
 st.markdown("""
 <style>
-    [data-testid="stMetricValue"] { font-size: 24px !important; font-weight: 800 !important; color: #1f77b4; }
+    [data-testid="stMetricValue"] { font-size: 26px !important; font-weight: 800 !important; color: #1f77b4; }
     .phase-card { background-color: #f4f6f9; padding: 20px; border-radius: 10px; border: 1px solid #dcdcdc; min-height: 420px; }
+    .tech-card { background-color: #fff; padding: 15px; border-radius: 8px; border-left: 5px solid #2e7d32; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 10px; }
     .news-card { background-color: #fff; padding: 15px; border-radius: 8px; border-left: 5px solid #0288d1; margin-bottom: 10px; font-size: 14px; }
     .fib-box { background-color: #e3f2fd; padding: 10px; border-radius: 5px; margin-top: 5px; border-left: 4px solid #1565c0; font-family: monospace; font-weight: bold; }
     .stop-loss-box { background-color: #fff1f1; border-left: 8px solid #ff4b4b; padding: 15px; margin-bottom: 20px; color: #b71c1c; font-weight: bold; }
@@ -26,6 +27,7 @@ st.markdown("""
     .v-red { background-color: #c62828; }
     .legend-box { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-top: 10px; font-size: 14px; line-height: 1.6; }
     .disclaimer-container { background-color: #262730; color: #aaa; padding: 15px; border-radius: 5px; font-size: 12px; margin-bottom: 20px; border: 1px solid #444; }
+    .upside-text { color: #2e7d32; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -87,6 +89,7 @@ def calculate_technicals(df):
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
+    
     recent_high = df['y'].tail(252).max()
     recent_low = df['y'].tail(252).min()
     diff = recent_high - recent_low
@@ -138,13 +141,20 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             sym = "$" if display_currency == "USD" else "€"
             cur_p = df['y'].iloc[-1] * fx
             
+            # --- AI ENGINE ---
             m = Prophet(daily_seasonality=False, yearly_seasonality=True).fit(df[['ds', 'y']])
-            future = m.make_future_dataframe(periods=30) # Changed to 30 days for requested view
+            future = m.make_future_dataframe(periods=180)
             forecast = m.predict(future)
             
-            target_p = forecast['yhat'].iloc[-1] * fx
-            potential_upside = target_p - cur_p
-            ai_roi = (potential_upside / cur_p) * 100
+            # 30-Day Sub-Logic (For Metric Box Only)
+            forecast_30_row = forecast.iloc[len(df) + 29] if len(forecast) > (len(df)+29) else forecast.iloc[-1]
+            target_p_30 = forecast_30_row['yhat'] * fx
+            upside_30 = target_p_30 - cur_p
+            roi_30 = (upside_30 / cur_p) * 100
+
+            # 180-Day Logic (For Strategic Analysis & Verdict)
+            target_p_180 = forecast['yhat'].iloc[-1] * fx
+            ai_roi_180 = ((target_p_180 - cur_p) / cur_p) * 100
             
             rsi, fibs = calculate_technicals(df)
             news_score, headlines = get_news_sentiment(ticker)
@@ -152,7 +162,7 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             score = 0
             if health['ROE'] > 0.15: score += 20
             if health['Debt'] < 1.1: score += 20
-            if ai_roi > 5: score += 30 # Adjusted for 30-day window
+            if ai_roi_180 > 10: score += 30
             if news_score > 0: score += 20
             score = min(100, score)
             
@@ -162,62 +172,64 @@ if st.sidebar.button("🚀 Run Deep Audit"):
 
             st.subheader(f"📊 {name} Analysis ({ticker})")
             
-            # --- ALIGNED METRICS ---
+            # --- ROW 1: METRICS (UPSCALE 30-DAY WINDOW FOR FIRST TWO) ---
             m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("Conviction", f"{score}/100")
+            m1.metric("Conviction Score", f"{score}/100")
             m2.metric("Risk Level", risk)
-            m3.metric("Live Price", f"{sym}{cur_p:,.2f}")
-            m4.metric("Potential Upside", f"{sym}{potential_upside:,.2f}", delta=f"{ai_roi:.2f}%")
-            m5.metric("AI 30d Target", f"{sym}{target_p:,.2f}")
+            m3.metric("Current Price", f"{sym}{cur_p:,.2f}")
+            # Potential Upside & Target adjusted to 30 days as requested
+            m4.metric("30d Potential Upside", f"{sym}{upside_30:,.2f}", delta=f"{roi_30:.1f}%")
+            m5.metric("30d AI Target", f"{sym}{target_p_30:,.2f}")
 
-            st.info(f"**Potential Upside:** The predicted growth in value per share over the next 30 days based on AI median trend projections.")
+            st.markdown(f"ℹ️ **Short-Term View:** Potential Upside and AI Target are showing a **30-day outlook**. All strategic ratings and the chart below maintain a **180-day forecast**.")
 
-            st.markdown(f'<div class="verdict-box {v_col}">Verdict: {verdict} | {action}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="verdict-box {v_col}">Strategic Verdict (180d): {verdict} | {action}</div>', unsafe_allow_html=True)
             
             sl_price = cur_p * 0.88 if risk == "Low" else cur_p * 0.85
-            st.markdown(f'<div class="stop-loss-box">🛑 STOP LOSS: Exit if price drops below {sym}{sl_price:,.2f}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="stop-loss-box">🛑 STOP LOSS GUIDANCE: Exit if price drops to {sym}{sl_price:,.2f}</div>', unsafe_allow_html=True)
 
             col_l, col_r = st.columns(2)
             with col_l:
-                st.markdown("### 🏥 Company Health")
+                st.markdown("### 🏥 Company Health Details")
                 st.table(pd.DataFrame({
-                    "Metric": ["ROE", "Debt/Eq", "Margin", "Current Ratio"],
+                    "Metric": ["ROE", "Debt/Equity", "Profit Margin", "Current Ratio"],
                     "Status": [f"{health['ROE']*100:.1f}%", health['Debt'], health['Margin'], health['CurrentRatio']],
                     "Rating": ["✅ Prime" if health['ROE'] > 0.15 else "⚠️ Weak", "✅ Safe" if health['Debt'] < 1.1 else "⚠️ High", "✅ Stable", "✅ Liquid"]
                 }))
-                st.markdown("### 📰 Sentiment Headlines")
+                st.markdown("### 📰 Latest News Headlines")
                 for h in headlines:
                     st.markdown(f'<div class="news-card">{h}</div>', unsafe_allow_html=True)
 
             with col_r:
-                st.markdown("### ⚖️ Fibonacci Entry Zones")
+                st.markdown("### ⚖️ Strategy & Fibonacci Limits")
                 st.markdown(f"""<div class="phase-card">
-                    <h4 style="color:#1f77b4">PHASE 1: CAPITAL ALLOCATION</h4>
-                    <p><b>Deploy Today:</b> {sym}{total_capital*(pct/100):,.2f} ({pct}% of total)</p>
+                    <h4 style="color:#1f77b4">PHASE 1: IMMEDIATE</h4>
+                    <p><b>Invest Today:</b> {sym}{total_capital*(pct/100):,.2f} ({pct}% of funds)</p>
                     <hr>
-                    <h4 style="color:#1f77b4">PHASE 2: VOLATILITY TARGETS</h4>
-                    <div class="fib-box">🔹 Support 1 (0.382): {sym}{fibs['0.382']*fx:,.2f}</div>
-                    <div class="fib-box">🔹 Support 2 (0.500): {sym}{fibs['0.500']*fx:,.2f}</div>
-                    <div class="fib-box">🔹 Support 3 (0.618): {sym}{fibs['0.618']*fx:,.2f}</div>
-                    <br><small>Limit orders at Support 2/3 are recommended for long-term accumulation.</small>
+                    <h4 style="color:#1f77b4">PHASE 2: STAGED ENTRY (FIBONACCI)</h4>
+                    <p>Set <b>Limit Orders</b> at these levels to catch dips.</p>
+                    <div class="fib-box">🔹 Target 1 (0.382): {sym}{fibs['0.382']*fx:,.2f}</div>
+                    <div class="fib-box">🔹 Target 2 (0.500): {sym}{fibs['0.500']*fx:,.2f}</div>
+                    <div class="fib-box">🔹 Target 3 (0.618): {sym}{fibs['0.618']*fx:,.2f}</div>
                 </div>""", unsafe_allow_html=True)
 
             st.markdown("---")
-            st.subheader("🤖 AI 30-Day Forecast Projection")
+            st.subheader("🤖 AI Forecast Projection (180-Day Trend)")
+            
             st.markdown("""
             <div class="legend-box">
                 <b>Chart Legend:</b><br>
-                <span style="color:#000000;">●</span> <b>Actuals:</b> Historical price closings.<br>
-                <span style="color:#1f77b4; font-weight:bold;">━</span> <b>Trend:</b> AI Median Projection.<br>
-                <span style="background-color:#d1e6f9; border:1px solid #1f77b4; padding:0 5px;">&nbsp;</span> <b>Zone:</b> 80% Volatility Range.
+                <span style="color:#000000;">●</span> <b>Black Dots:</b> Historical Price.<br>
+                <span style="color:#1f77b4; font-weight:bold;">━</span> <b>Solid Blue Line:</b> AI Median Path.<br>
+                <span style="background-color:#d1e6f9; border:1px solid #1f77b4; padding:0 5px;">&nbsp;</span> <b>Light Blue Shade:</b> Volatility Zone (80% probability).
             </div>
             """, unsafe_allow_html=True)
             
-            # Zoom to 30 days view
-            forecast_zoom = forecast.tail(60) # Show last 30 days + 30 forecast days
-            forecast_zoom[['yhat', 'yhat_lower', 'yhat_upper']] *= fx
-            fig1 = m.plot(forecast_zoom)
-            plt.title(f"{name}: 30-Day Short Term Outlook")
+            # Plot remains 180 days
+            forecast_plot = forecast.copy()
+            forecast_plot[['yhat', 'yhat_lower', 'yhat_upper']] *= fx
+            fig1 = m.plot(forecast_plot)
+            plt.title(f"{name} 180-Day Growth Forecast")
             st.pyplot(fig1)
 
         else: st.error("Data Unavailable.")
