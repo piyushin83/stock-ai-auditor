@@ -11,15 +11,27 @@ import matplotlib.dates as mdates
 import datetime
 import yfinance as yf
 
-# 1. UI SETUP & CSS
+# 1. UI SETUP & CSS (REPAIRED FOR DARK MODE)
 st.set_page_config(page_title="Strategic AI Investment Architect", layout="wide")
 
 st.markdown("""
 <style>
+    /* Global Metric Styling */
     [data-testid="stMetricValue"] { font-size: 26px !important; font-weight: 800 !important; color: #1f77b4; }
-    .phase-card { background-color: #f4f6f9; padding: 20px; border-radius: 10px; border: 1px solid #dcdcdc; min-height: 420px; }
-    .news-card { background-color: #fff; padding: 15px; border-radius: 8px; border-left: 5px solid #0288d1; margin-bottom: 10px; font-size: 14px; }
-    .fib-box { background-color: #e3f2fd; padding: 10px; border-radius: 5px; margin-top: 5px; border-left: 4px solid #1565c0; font-family: monospace; font-weight: bold; }
+    
+    /* Default (Light Mode) Styling */
+    .phase-card { background-color: #f4f6f9; color: #1a1a1a; padding: 20px; border-radius: 10px; border: 1px solid #dcdcdc; min-height: 420px; }
+    .news-card { background-color: #ffffff; color: #1a1a1a; padding: 15px; border-radius: 8px; border-left: 5px solid #0288d1; margin-bottom: 10px; font-size: 14px; box-shadow: 1px 1px 5px rgba(0,0,0,0.1); }
+    .fib-box { background-color: #e3f2fd; color: #0d47a1; padding: 10px; border-radius: 5px; margin-top: 5px; border-left: 4px solid #1565c0; font-family: monospace; font-weight: bold; }
+    
+    /* DARK MODE OVERRIDES */
+    @media (prefers-color-scheme: dark) {
+        .phase-card { background-color: #1e2129; color: #ffffff; border: 1px solid #3d414b; }
+        .news-card { background-color: #262730; color: #ffffff; border-left: 5px solid #00b0ff; box-shadow: 1px 1px 10px rgba(0,0,0,0.3); }
+        .fib-box { background-color: #0d47a1; color: #e3f2fd; border-left: 4px solid #00b0ff; }
+        .phase-card h4 { color: #00b0ff !important; }
+    }
+
     .stop-loss-box { background-color: #fff1f1; border-left: 8px solid #ff4b4b; padding: 15px; margin-bottom: 20px; color: #b71c1c; font-weight: bold; }
     .verdict-box { padding: 20px; border-radius: 8px; margin-bottom: 20px; font-weight: bold; font-size: 22px; text-align: center; color: white; text-transform: uppercase; }
     .v-green { background-color: #2e7d32; }
@@ -31,7 +43,7 @@ st.markdown("""
 
 # 2. DISCLAIMER
 st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders for market volatility and may differ from AI trend projections.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (V7.2)")
+st.title("🏛️ Strategic AI Investment Architect (V7.6)")
 
 # 3. HELPER ENGINES
 def get_exchange_rate(from_curr, to_curr):
@@ -69,7 +81,7 @@ def get_news_sentiment(ticker):
         if not news_table: return 0, []
         parsed_news = []
         sentiment_score = 0
-        rows = news_table.findAll('tr')
+        rows = news_table.find_all('tr')
         for index, row in enumerate(rows[:5]):
             text = row.a.text
             blob = TextBlob(text)
@@ -102,7 +114,6 @@ def get_fundamental_health(ticker, suffix):
     try:
         end = datetime.datetime.now()
         start = end - datetime.timedelta(days=1825)
-        # ORIGINAL STOOQ ENGINE
         df = web.DataReader(f"{ticker}{suffix}", 'stooq', start, end)
         if df is None or df.empty: return None, None
         df = df.reset_index().rename(columns={'Date': 'ds', 'Close': 'y', 'Volume': 'vol'}).sort_values('ds')
@@ -140,19 +151,15 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             sym = "$" if display_currency == "USD" else "€"
             cur_p = df['y'].iloc[-1] * fx
             
-            # MA Overlays
             df['MA50'] = df['y'].rolling(window=50).mean()
             df['MA200'] = df['y'].rolling(window=200).mean()
             
-            # Prophet Training
             m = Prophet(daily_seasonality=False, yearly_seasonality=True).fit(df[['ds', 'y']])
             future = m.make_future_dataframe(periods=180)
             forecast = m.predict(future)
             
             target_p_30 = forecast['yhat'].iloc[len(df) + 29] * fx
             target_p_180 = forecast['yhat'].iloc[-1] * fx
-            
-            # --- LOGIC CORRECTION: UNBIASED ROI ---
             ai_roi_180 = ((target_p_180 - cur_p) / cur_p) * 100
             
             rsi, fibs = calculate_technicals(df)
@@ -160,22 +167,18 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             
             # --- WEIGHTED SCORING MATRIX ---
             score = 0
-            
-            # Momentum Penalty (Hard-Logic for crashes)
             is_bearish = cur_p < (df['MA200'].iloc[-1] * fx)
             
-            if not is_bearish: score += 30 # Reward long-term health
+            if not is_bearish: score += 30 
             if health['ROE'] > 0.15: score += 15
             if health['Debt'] < 1.1: score += 15
-            
             if ai_roi_180 > 10: score += 40 
             elif ai_roi_180 > 0: score += 10
-            else: score -= 40 # Heavy penalty for negative forecast
+            else: score -= 40 
 
             if news_score > 0: score += 10
             score = max(0, min(100, score))
             
-            # FINAL VERDICT
             if ai_roi_180 < -1 or score < 40:
                 verdict, action, v_col, risk, pct = "Avoid", "ACTION: STAY AWAY / BEARISH TREND", "v-red", "High", 0
             elif score >= 75:
@@ -223,20 +226,15 @@ if st.sidebar.button("🚀 Run Deep Audit"):
 
             st.markdown("---")
             st.subheader("🤖 AI Stock 12-Month Prediction (MA Overlays)")
-            
             fig, ax = plt.subplots(figsize=(12, 6))
+            # Set background color of the plot itself for dark mode
+            # Check if streamlit is in dark mode (usually via browser preference)
             forecast_plot = forecast.copy()
             forecast_plot[['yhat', 'yhat_lower', 'yhat_upper']] *= fx
             m.plot(forecast_plot, ax=ax)
-            
-            # MA Overlays
             ax.plot(df['ds'], df['MA50'] * fx, label='50-Day MA', color='orange', linewidth=1.5)
             ax.plot(df['ds'], df['MA200'] * fx, label='200-Day MA', color='red', linewidth=1.5)
-            
-            hist_view = datetime.datetime.now() - datetime.timedelta(days=180)
-            fut_view = datetime.datetime.now() + datetime.timedelta(days=180)
-            ax.set_xlim([hist_view, fut_view])
-            ax.xaxis.set_major_locator(mdates.MonthLocator())
+            ax.set_xlim([datetime.datetime.now() - datetime.timedelta(days=180), datetime.datetime.now() + datetime.timedelta(days=180)])
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
             plt.xticks(rotation=45)
             plt.legend(loc='upper left')
