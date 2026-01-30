@@ -106,7 +106,7 @@ def calculate_technicals(df):
 def get_fundamental_health(ticker, suffix):
     try:
         end = datetime.datetime.now()
-        start = end - datetime.timedelta(days=1460) # Increased to 4 years to capture 2023-2026
+        start = end - datetime.timedelta(days=1460) # 4 Year history
         df = web.DataReader(f"{ticker}{suffix}", 'stooq', start, end)
         if df is None or df.empty: return None, None
         df = df.reset_index().rename(columns={'Date': 'ds', 'Close': 'y', 'Volume': 'vol'}).sort_values('ds')
@@ -216,29 +216,33 @@ if st.sidebar.button("🚀 Run Deep Audit"):
                 </div>""", unsafe_allow_html=True)
 
             st.markdown("---")
-            st.subheader("🤖 AI Forecast Projection (Yearly Overview & Monthly Detail)")
+            st.subheader("🤖 AI Forecast Projection (Yearly Squeeze & Monthly Detail)")
             forecast_plot = forecast.copy()
             forecast_plot[['yhat', 'yhat_lower', 'yhat_upper']] *= fx
             
-            fig, ax = plt.subplots(figsize=(10, 6))
+            fig, ax = plt.subplots(figsize=(12, 6))
             m.plot(forecast_plot, ax=ax)
             
-            # PHASE LINES LOGIC
+            # PHASE LINES
             date_30d = forecast['ds'].iloc[row_30d]
             date_180d = forecast['ds'].iloc[-1]
-            
-            ax.axvline(date_30d, color='orange', linestyle='--', alpha=0.7, label='30d Tactical')
-            ax.axvline(date_180d, color='green', linestyle='--', alpha=0.7, label='180d Strategic')
-            
-            ax.text(date_30d, ax.get_ylim()[1]*0.95, ' 30d Target', color='orange', fontweight='bold')
-            ax.text(date_180d, ax.get_ylim()[1]*0.95, ' 180d Target', color='green', fontweight='bold')
+            ax.axvline(date_30d, color='orange', linestyle='--', alpha=0.7)
+            ax.axvline(date_180d, color='green', linestyle='--', alpha=0.7)
+            ax.text(date_30d, ax.get_ylim()[1]*0.95, ' 30d', color='orange', fontweight='bold')
+            ax.text(date_180d, ax.get_ylim()[1]*0.95, ' 180d', color='green', fontweight='bold')
 
-            # CUSTOM AXIS LOGIC
-            ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=12))
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-            plt.xticks(rotation=45)
+            # --- SQUEEZE & MONTHLY LOGIC ---
+            # Set X-limit to show exactly 4 years back to 180 days forward
+            start_date = datetime.datetime.now() - datetime.timedelta(days=1460)
+            ax.set_xlim([start_date, date_180d + datetime.timedelta(days=10)])
             
-            plt.title(f"{name} Strategic Growth Forecast")
+            # Frequency: Monthly ticks
+            ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3)) # Quarterly labels to keep it clean
+            ax.xaxis.set_minor_locator(mdates.MonthLocator()) # Monthly small ticks
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+            
+            plt.xticks(rotation=45)
+            plt.title(f"{name} 4-Year Squeeze & 180-Day Projection")
             st.pyplot(fig)
 
         else: st.error("Data Unavailable.")
