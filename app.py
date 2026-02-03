@@ -11,8 +11,8 @@ import matplotlib.dates as mdates
 import datetime
 import yfinance as yf
 
-# 1. UI SETUP & THEME-AWARE CSS
-st.set_page_config(page_title="Strategic AI Investment Architect", layout="wide")
+# 1. UI SETUP & CSS
+st.set_page_config(page_title="Strategic AI Architect V8.3", layout="wide")
 
 st.markdown("""
 <style>
@@ -35,8 +35,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders. AI projections assume trend continuity.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (V8.2)")
+st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Universal Analysis Engine. AI targets are mathematically projected and do not guarantee market performance.</div>', unsafe_allow_html=True)
+st.title("🏛️ Strategic AI Investment Architect (V8.3)")
 
 # 3. HELPER ENGINES
 def get_exchange_rate(from_curr, to_curr):
@@ -70,19 +70,19 @@ def get_news_sentiment(ticker):
         news_table = soup.find(id='news-table')
         if not news_table: return 0, []
         
-        impact_keywords = ['earnings', 'revenue', 'lawsuit', 'dividend', 'fed', 'acquisition', 'sec', 'crash', 'bull', 'growth']
+        # Point 2: Effect-based News Filtering
+        impact_keywords = ['earnings', 'dividend', 'fed', 'rate', 'revenue', 'lawsuit', 'sec', 'merger', 'acquisition', 'guidance', 'downgrade', 'upgrade']
         parsed_news, sentiment_score = [], 0
         rows = news_table.find_all('tr')
         
         for row in rows:
             text = row.a.text
-            # Filter for relevance (Point 2 of your question)
-            if any(word in text.lower() for word in impact_keywords) or len(parsed_news) < 3:
+            if any(k in text.lower() for k in impact_keywords) or len(parsed_news) < 2:
                 score = TextBlob(text).sentiment.polarity
                 sentiment_score += score
                 parsed_news.append(f"{'🟢' if score > 0 else '🔴' if score < 0 else '⚪'} {text}")
             if len(parsed_news) >= 5: break
-        return (sentiment_score / 5), parsed_news
+        return (sentiment_score / 5 if parsed_news else 0), (parsed_news if parsed_news else ["No high-impact news found."])
     except: return 0, ["⚠️ News Feed Unavailable"]
 
 def calculate_technicals(df):
@@ -124,13 +124,13 @@ def get_fundamental_health(ticker, suffix):
 
 # 4. SIDEBAR
 st.sidebar.header("⚙️ Configuration")
-user_query = st.sidebar.text_input("Ticker", value="MSFT")
+user_query = st.sidebar.text_input("Ticker / Company", value="AAPL")
 display_currency = st.sidebar.selectbox("Currency", ["USD", "EUR"])
 total_capital = st.sidebar.number_input("Capital", value=10000)
 
 # 5. MAIN EXECUTION
 if st.sidebar.button("🚀 Run Deep Audit"):
-    with st.spinner("Processing..."):
+    with st.spinner("Processing Logic..."):
         ticker, name, suffix, native_curr = resolve_smart_ticker(user_query)
         df, health = get_fundamental_health(ticker, suffix)
         
@@ -142,39 +142,37 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             df['MA50_Days'] = df['y'].rolling(window=50).mean()
             df['MA200_Days'] = df['y'].rolling(window=200).mean()
             
-            # --- AI LOGIC (180d Range, 30d Targets) ---
+            # --- SYNCED AI LOGIC ---
             m = Prophet(daily_seasonality=False, yearly_seasonality=True, changepoint_prior_scale=0.01).fit(df[['ds', 'y']])
             future = m.make_future_dataframe(periods=180) 
             forecast = m.predict(future)
             
-            # Cross Logic (Point 1 & 3 of your question)
+            # Point 1 & 3: Bridge the Gap between AI and Technicals
             is_death_cross = df['MA50_Days'].iloc[-1] < df['MA200_Days'].iloc[-1]
-            crossover_msg = "Market stability detected."
+            crossover_msg = "Price stability detected."
             cross_point = None
             for i in range(len(df)-60, len(df)):
                 prev = i-1
                 if df['MA50_Days'].iloc[prev] < df['MA200_Days'].iloc[prev] and df['MA50_Days'].iloc[i] > df['MA200_Days'].iloc[i]:
                     cross_point = (df['ds'].iloc[i], df['MA50_Days'].iloc[i], "GOLDEN")
-                    crossover_msg = "🚀 GOLDEN CROSS DETECTED: Bullish outlook."
+                    crossover_msg = "🚀 GOLDEN CROSS: Technical momentum is turning Bullish."
                 elif df['MA50_Days'].iloc[prev] > df['MA200_Days'].iloc[prev] and df['MA50_Days'].iloc[i] < df['MA200_Days'].iloc[i]:
                     cross_point = (df['ds'].iloc[i], df['MA50_Days'].iloc[i], "DEATH")
-                    crossover_msg = "⚠️ DEATH CROSS DETECTED: Bearish long-term risk."
+                    crossover_msg = "⚠️ DEATH CROSS: Technical risk detected. AI projection adjusted for bearish pressure."
 
-            # ADJUST AI FOR DEATH CROSS (SYNCING LOGIC)
-            target_p_30 = forecast['yhat'].iloc[len(df) + 29] * fx
-            if is_death_cross:
-                # Penalty: Reduces target price if technicals are bearish
-                target_p_30 *= 0.92 
-            
+            # Calculate Target & Apply Bearish Penalty if Death Cross is active
+            raw_target_30 = forecast['yhat'].iloc[len(df) + 29] * fx
+            target_p_30 = raw_target_30 * 0.90 if is_death_cross else raw_target_30
             ai_roi_30 = ((target_p_30 - cur_p) / cur_p) * 100
+            
             rsi, fibs = calculate_technicals(df)
             news_score, headlines = get_news_sentiment(ticker)
             
-            # Scoring
+            # Logic-aware Scoring
             score = 0
             if not is_death_cross: score += 30 
             if health['ROE'] > 0.15: score += 15
-            if ai_roi_30 > 1: score += 40 
+            if ai_roi_30 > 2: score += 40 
             elif ai_roi_30 < -1: score -= 50
             score = max(0, min(100, score))
             
@@ -199,45 +197,45 @@ if st.sidebar.button("🚀 Run Deep Audit"):
 
             col_l, col_r = st.columns(2)
             with col_l:
-                st.markdown("### 🏥 Company Health")
+                st.markdown("### 🏥 Fundamental Health")
                 st.table(pd.DataFrame({
                     "Metric": ["ROE", "P/B Ratio", "Debt/Equity", "Current Ratio"],
                     "Status": [f"{health['ROE']*100:.1f}%", f"{health['PB']}x", health['Debt'], health['CurrentRatio']],
                     "Rating": ["✅ Prime" if health['ROE'] > 0.15 else "⚠️ Weak", "✅ Healthy" if health['PB'] < 3.0 else "⚠️ Overvalued", "✅ Safe", "✅ Liquid"]
                 }))
-                st.markdown("### 📰 Impactful News Headlines")
+                st.markdown("### 📰 Market Impact News")
                 for h in headlines: st.markdown(f'<div class="news-card">{h}</div>', unsafe_allow_html=True)
 
             with col_r:
-                st.markdown("### ⚖️ Strategy & Fibonacci Limits")
+                st.markdown("### ⚖️ Portfolio & Fibonacci Strategy")
                 st.markdown(f"""<div class="phase-card">
-                    <h4 style="color:#1f77b4">PHASE 1: IMMEDIATE</h4>
-                    <p><b>Invest Today:</b> {sym}{total_capital*(pct/100):,.2f} ({pct}% of funds)</p>
+                    <h4 style="color:#1f77b4">PHASE 1: CAPITAL ALLOCATION</h4>
+                    <p><b>Initial Entry:</b> {sym}{total_capital*(pct/100):,.2f} ({pct}% of total capital)</p>
                     <hr>
-                    <h4 style="color:#1f77b4">PHASE 2: STAGED ENTRY (FIBONACCI)</h4>
-                    <div class="fib-box">🔹 Target 1 (0.382): {sym}{fibs['0.382']*fx:,.2f}</div>
-                    <div class="fib-box">🔹 Target 2 (0.500): {sym}{fibs['0.500']*fx:,.2f}</div>
-                    <div class="fib-box">🔹 Target 3 (0.618): {sym}{fibs['0.618']*fx:,.2f}</div>
+                    <h4 style="color:#1f77b4">PHASE 2: VOLATILITY TARGETS</h4>
+                    <div class="fib-box">🔹 Limit Buy (0.382): {sym}{fibs['0.382']*fx:,.2f}</div>
+                    <div class="fib-box">🔹 Limit Buy (0.500): {sym}{fibs['0.500']*fx:,.2f}</div>
+                    <div class="fib-box">🔹 Limit Buy (0.618): {sym}{fibs['0.618']*fx:,.2f}</div>
                 </div>""", unsafe_allow_html=True)
 
             st.markdown("---")
-            st.subheader("🤖 AI Stock 180-Day Projection (Technical Sync)")
+            st.subheader("🤖 AI Stock 180-Day Projection (Synced Indicators)")
             fig, ax = plt.subplots(figsize=(12, 6))
             forecast_plot = forecast.copy()
             forecast_plot[['yhat', 'yhat_lower', 'yhat_upper']] *= fx
             
-            # SYNC VISUAL: If Death Cross, we trend the forecast down slightly
+            # Point 3 Correction: Sync the Blue Line to the Death Cross
             if is_death_cross:
-                forecast_plot.loc[forecast_plot.index > len(df), 'yhat'] *= 0.95
+                forecast_plot.loc[forecast_plot.index > len(df), 'yhat'] *= 0.94 # Visual adjustment for bearish pressure
 
             m.plot(forecast_plot, ax=ax)
-            ax.plot(df['ds'], df['MA50_Days'] * fx, label='50-Day MA', color='orange', alpha=0.7)
-            ax.plot(df['ds'], df['MA200_Days'] * fx, label='200-Day MA', color='red', alpha=0.7)
+            ax.plot(df['ds'], df['MA50_Days'] * fx, label='50-Day MA', color='orange', alpha=0.8)
+            ax.plot(df['ds'], df['MA200_Days'] * fx, label='200-Day MA', color='red', alpha=0.8)
             
             if cross_point:
-                ax.scatter(cross_point[0], cross_point[1] * fx, color='gold', s=300, marker='*', label=f"{cross_point[2]}", zorder=5)
+                ax.scatter(cross_point[0], cross_point[1] * fx, color='gold', s=300, marker='*', label=f"{cross_point[2]} POINT", zorder=5)
             
             ax.set_xlim([datetime.datetime.now() - datetime.timedelta(days=180), datetime.datetime.now() + datetime.timedelta(days=180)])
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
             plt.legend(loc='upper left'); st.pyplot(fig)
-        else: st.error("Data Unavailable.")
+        else: st.error("Search failed. Please try a standard ticker symbol (e.g., NVDA, TSLA).")
