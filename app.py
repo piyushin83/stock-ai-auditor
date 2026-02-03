@@ -40,7 +40,7 @@ st.markdown("""
 
 # 2. DISCLAIMER
 st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders. AI projections are mathematical and adjusted for market volatility.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (V8.7)")
+st.title("🏛️ Strategic AI Investment Architect (V8.9)")
 
 # 3. HELPER ENGINES
 def get_exchange_rate(from_curr, to_curr):
@@ -148,14 +148,18 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             sym = "$" if display_currency == "USD" else "€"
             cur_p = df['y'].iloc[-1] * fx
             
-            # Explicit Full MA Labels
             df['50_Day_Moving_Average'] = df['y'].rolling(window=50).mean()
             df['200_Day_Moving_Average'] = df['y'].rolling(window=200).mean()
             
-            # AI Logic (Outlier Handling Restored)
             m = Prophet(daily_seasonality=False, yearly_seasonality=True, changepoint_prior_scale=0.015, changepoint_range=0.90).fit(df[['ds', 'y']])
             future = m.make_future_dataframe(periods=180) 
             forecast = m.predict(future)
+            
+            # --- Deviation & Fair Value Range ---
+            trend_val = forecast[forecast['ds'] == df['ds'].iloc[-1]]['yhat'].values[0] * fx
+            deviation = ((cur_p - trend_val) / trend_val) * 100
+            fair_low = trend_val * 0.95
+            fair_high = trend_val * 1.05
             
             is_death_cross = df['50_Day_Moving_Average'].iloc[-1] < df['200_Day_Moving_Average'].iloc[-1]
             crossover_msg = "Price stability detected."
@@ -164,12 +168,11 @@ if st.sidebar.button("🚀 Run Deep Audit"):
                 prev = i-1
                 if df['50_Day_Moving_Average'].iloc[prev] < df['200_Day_Moving_Average'].iloc[prev] and df['50_Day_Moving_Average'].iloc[i] > df['200_Day_Moving_Average'].iloc[i]:
                     cross_point = (df['ds'].iloc[i], df['50_Day_Moving_Average'].iloc[i], "GOLDEN")
-                    crossover_msg = "🚀 GOLDEN CROSS: 50-Day Moving Average crossed ABOVE 200-Day. Bullish momentum."
+                    crossover_msg = "🚀 GOLDEN CROSS: 50-Day Moving Average crossed ABOVE 200-Day."
                 elif df['50_Day_Moving_Average'].iloc[prev] > df['200_Day_Moving_Average'].iloc[prev] and df['50_Day_Moving_Average'].iloc[i] < df['200_Day_Moving_Average'].iloc[i]:
                     cross_point = (df['ds'].iloc[i], df['50_Day_Moving_Average'].iloc[i], "DEATH")
-                    crossover_msg = "⚠️ DEATH CROSS: 50-Day Moving Average crossed BELOW 200-Day. Bearish structure."
+                    crossover_msg = "⚠️ DEATH CROSS: 50-Day Moving Average crossed BELOW 200-Day."
 
-            # Balanced Scoring (Requirement 1: Reduce 'Sell' bias restored)
             target_p_30 = forecast['yhat'].iloc[len(df) + 29] * fx
             if is_death_cross: target_p_30 *= 0.96 
             ai_roi_30 = ((target_p_30 - cur_p) / cur_p) * 100
@@ -177,7 +180,7 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             rsi, fibs = calculate_technicals(df)
             news_score, headlines = get_news_sentiment(ticker)
             
-            score = 15 # Base Floor
+            score = 15 
             if not is_death_cross: score += 20 
             if health['ROE'] > 0.12: score += 20 
             if ai_roi_30 > 0.5: score += 30 
@@ -192,6 +195,16 @@ if st.sidebar.button("🚀 Run Deep Audit"):
 
             # --- DISPLAY ---
             st.subheader(f"📊 {name} Analysis ({ticker})")
+            
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                if deviation > 15:
+                    st.warning(f"⚠️ MEAN REVERSION RISK: Price is {deviation:.1f}% above AI baseline trend.")
+                else:
+                    st.success(f"✅ TREND ALIGNMENT: Price is within {deviation:.1f}% of AI baseline.")
+            with col_f2:
+                st.info(f"💎 AI FAIR VALUE RANGE: {sym}{fair_low:,.2f} - {sym}{fair_high:,.2f}")
+
             st.markdown(f'<div class="impact-announcement">{crossover_msg}</div>', unsafe_allow_html=True)
             
             m1, m2, m3, m4 = st.columns(4)
@@ -231,29 +244,23 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             fig, ax = plt.subplots(figsize=(12, 6))
             forecast_plot = forecast.copy()
             forecast_plot[['yhat', 'yhat_lower', 'yhat_upper']] *= fx
-            
-            # Requirement: Visual clean-up for outliers and Full MA labels
             m.plot(forecast_plot, ax=ax)
             ax.plot(df['ds'], df['50_Day_Moving_Average'] * fx, label='50-Day Moving Average', color='orange', linewidth=2)
             ax.plot(df['ds'], df['200_Day_Moving_Average'] * fx, label='200-Day Moving Average', color='red', linewidth=2)
-            
             if cross_point:
                 ax.scatter(cross_point[0], cross_point[1] * fx, color='gold', s=300, marker='*', label=f"{cross_point[2]} CROSS POINT", zorder=5)
-            
             ax.set_xlim([datetime.datetime.now() - datetime.timedelta(days=180), datetime.datetime.now() + datetime.timedelta(days=180)])
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
             plt.legend(loc='upper left'); st.pyplot(fig)
 
-            # --- NEW ADDITION: VOLUME TREND ANALYSIS ---
             st.markdown("---")
             st.subheader("📊 12-Month Relative Volume Trend")
             vol_fig, vol_ax = plt.subplots(figsize=(12, 4))
-            vol_df = df.tail(252).copy() # Looking at roughly 1 year of trading days
-            colors = ['#2e7d32' if row['y'] >= df.iloc[i-1]['y'] else '#c62828' for i, row in vol_df.iterrows()]
+            vol_df = df.tail(252).copy() 
+            colors = ['#2e7d32' if i > 0 and vol_df.iloc[i]['y'] >= vol_df.iloc[i-1]['y'] else '#c62828' for i in range(len(vol_df))]
             vol_ax.bar(vol_df['ds'], vol_df['vol'], color=colors, alpha=0.7)
             vol_ax.set_ylabel("Shares Traded")
             vol_ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
             st.pyplot(vol_fig)
-            st.info("💡 Green bars indicate volume on days where the price closed higher. Red bars indicate volume on selling days.")
             
         else: st.error("Data Unreachable. Check Symbol.")
