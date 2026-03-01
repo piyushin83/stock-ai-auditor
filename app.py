@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import datetime
 import yfinance as yf
+import time
 
 # 1. UI SETUP & THEME-AWARE CSS
 st.set_page_config(page_title="Strategic AI Investment Architect", layout="wide")
@@ -21,11 +22,13 @@ st.markdown("""
     .phase-card { background-color: #f4f6f9; color: #1a1a1a; padding: 20px; border-radius: 10px; border: 1px solid #dcdcdc; min-height: 420px; }
     .news-card { background-color: #ffffff; color: #1a1a1a; padding: 15px; border-radius: 8px; border-left: 5px solid #0288d1; margin-bottom: 10px; font-size: 14px; box-shadow: 1px 1px 5px rgba(0,0,0,0.1); }
     .fib-box { background-color: #e3f2fd; color: #0d47a1; padding: 10px; border-radius: 5px; margin-top: 5px; border-left: 4px solid #1565c0; font-family: monospace; font-weight: bold; }
+    .impact-news { background-color: #fff3e0; border-left: 8px solid #ff9800; padding: 10px; margin-bottom: 8px; border-radius: 5px; }
     
     @media (prefers-color-scheme: dark) {
         .phase-card { background-color: #1e2129; color: #ffffff; border: 1px solid #3d414b; }
         .news-card { background-color: #262730; color: #ffffff; border-left: 5px solid #00b0ff; }
         .fib-box { background-color: #0d47a1; color: #e3f2fd; border-left: 4px solid #00b0ff; }
+        .impact-news { background-color: #332e1f; color: #ffe0b2; border-left: 8px solid #ffb74d; }
     }
 
     .impact-announcement { background-color: #fff3cd; color: #856404; padding: 15px; border-radius: 5px; border-left: 8px solid #ffc107; margin-bottom: 20px; font-weight: bold; }
@@ -40,7 +43,7 @@ st.markdown("""
 
 # 2. DISCLAIMER
 st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders. AI projections are mathematical and adjusted for market volatility.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (V8.9)")
+st.title("🏛️ Strategic AI Investment Architect (V9.0)")
 
 # 3. HELPER ENGINES
 def get_exchange_rate(from_curr, to_curr):
@@ -69,26 +72,110 @@ def resolve_smart_ticker(user_input):
     except: pass
     return ticker_str, ticker_str, ".US", "USD"
 
-def get_news_sentiment(ticker):
+# --- Enhanced News Fetching (Finviz + Yahoo Finance) ---
+def get_enhanced_news(ticker):
+    """
+    Fetch news from Finviz and Yahoo Finance, compute sentiment,
+    and return a list of dicts with 'date', 'headline', 'sentiment', 'source'.
+    """
+    headlines = []
+    
+    # 1. Finviz news
     try:
         url = f"https://finviz.com/quote.ashx?t={ticker}"
         headers = {'User-Agent': 'Mozilla/5.0'}
         req = requests.get(url, headers=headers, timeout=5)
         soup = BeautifulSoup(req.text, 'html.parser')
         news_table = soup.find(id='news-table')
-        if not news_table: return 0, []
-        impact_keywords = ['earnings', 'dividend', 'fed', 'revenue', 'lawsuit', 'sec', 'merger', 'acquisition', 'growth', 'crash']
-        parsed_news, sentiment_score = [], 0
-        rows = news_table.find_all('tr')
-        for row in rows:
-            text = row.a.text
-            if any(k in text.lower() for k in impact_keywords) or len(parsed_news) < 2:
-                score = TextBlob(text).sentiment.polarity
-                sentiment_score += score
-                parsed_news.append(f"{'🟢' if score > 0 else '🔴' if score < 0 else '⚪'} {text}")
-            if len(parsed_news) >= 5: break
-        return (sentiment_score / 5), parsed_news
-    except: return 0, ["⚠️ News Feed Unavailable"]
+        if news_table:
+            rows = news_table.find_all('tr')
+            for row in rows[:10]:  # get up to 10
+                try:
+                    # Finviz format: <td>...<a>headline</a></td>
+                    a_tag = row.find('a')
+                    if a_tag and a_tag.text:
+                        headline = a_tag.text
+                        # date is in preceding <td> maybe
+                        date_td = row.find('td', class_='nn-date')
+                        date_str = date_td.text if date_td else ""
+                        # parse date (rough)
+                        if date_str:
+                            try:
+                                # often like "Mar-01-25 09:00AM"
+                                dt = datetime.datetime.strptime(date_str, "%b-%d-%y %I:%M%p")
+                            except:
+                                dt = datetime.datetime.now()
+                        else:
+                            dt = datetime.datetime.now()
+                        sentiment = TextBlob(headline).sentiment.polarity
+                        headlines.append({
+                            'date': dt,
+                            'headline': headline,
+                            'sentiment': sentiment,
+                            'source': 'Finviz'
+                        })
+                except:
+                    continue
+    except Exception as e:
+        st.warning(f"Finviz news unavailable: {e}")
+
+    # 2. Yahoo Finance news
+    try:
+        ticker_obj = yf.Ticker(ticker)
+        yf_news = ticker_obj.news
+        for item in yf_news[:10]:
+            try:
+                title = item.get('title', '')
+                if not title:
+                    continue
+                # timestamp is in 'providerPublishTime' (seconds)
+                ts = item.get('providerPublishTime')
+                if ts:
+                    dt = datetime.datetime.fromtimestamp(ts)
+                else:
+                    dt = datetime.datetime.now()
+                sentiment = TextBlob(title).sentiment.polarity
+                headlines.append({
+                    'date': dt,
+                    'headline': title,
+                    'sentiment': sentiment,
+                    'source': 'Yahoo'
+                })
+            except:
+                continue
+    except Exception as e:
+        st.warning(f"Yahoo Finance news unavailable: {e}")
+
+    # Remove duplicates (by headline)
+    unique = []
+    seen = set()
+    for h in headlines:
+        if h['headline'] not in seen:
+            seen.add(h['headline'])
+            unique.append(h)
+    # Sort by date (most recent first)
+    unique.sort(key=lambda x: x['date'], reverse=True)
+    return unique
+
+def filter_impactful_news(news_list, threshold=0.3, keywords=None):
+    """
+    Return news items that are either:
+    - absolute sentiment > threshold, or
+    - headline contains any of the provided keywords (case‑insensitive).
+    """
+    if keywords is None:
+        keywords = ['earnings', 'dividend', 'fed', 'revenue', 'lawsuit', 'sec',
+                    'merger', 'acquisition', 'growth', 'crash', 'ai', 'claude',
+                    'agent', 'product', 'launch', 'guidance', 'forecast', 'upgrade',
+                    'downgrade', 'target', 'investor', 'conference']
+    impactful = []
+    for item in news_list:
+        headline_lower = item['headline'].lower()
+        if abs(item['sentiment']) > threshold:
+            impactful.append(item)
+        elif any(kw in headline_lower for kw in keywords):
+            impactful.append(item)
+    return impactful
 
 def calculate_technicals(df):
     delta = df['y'].diff()
@@ -131,6 +218,37 @@ def get_fundamental_health(ticker, suffix):
         return df, health
     except: return None, None
 
+# --- Volume trend interpretation function ---
+def volume_trend_message(df_vol):
+    if df_vol.empty or len(df_vol) < 20:
+        return "Insufficient volume data."
+    df_vol = df_vol.copy()
+    df_vol['price_change'] = df_vol['y'].diff()
+    df_vol['vol_change'] = df_vol['vol'].diff()
+    
+    up_days = df_vol[df_vol['price_change'] > 0]
+    up_vol_up = (up_days['vol_change'] > 0).sum()
+    down_days = df_vol[df_vol['price_change'] < 0]
+    down_vol_up = (down_days['vol_change'] > 0).sum()
+    
+    total_up = len(up_days)
+    total_down = len(down_days)
+    
+    if total_up == 0 or total_down == 0:
+        return "Neutral volume pattern (recent price action too one‑sided)."
+    
+    up_confirmation = up_vol_up / total_up
+    down_confirmation = down_vol_up / total_down  # rising volume on down days is bearish
+    
+    if up_confirmation > 0.6 and down_confirmation < 0.4:
+        return "✅ Volume confirms uptrend: rising prices on rising volume, falling prices on falling volume – bullish."
+    elif up_confirmation < 0.4 and down_confirmation > 0.6:
+        return "⚠️ Volume divergence: prices rise on low volume but fall on high volume – bearish signal."
+    elif up_confirmation > 0.6 and down_confirmation > 0.6:
+        return "⚖️ Mixed volume: both up and down days see rising volume – market indecision."
+    else:
+        return "➡️ Neutral volume trend; no strong confirmation or divergence."
+
 # 4. SIDEBAR
 st.sidebar.header("⚙️ Configuration")
 user_query = st.sidebar.text_input("Ticker / Symbol", value="NVDA")
@@ -151,7 +269,17 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             df['50_Day_Moving_Average'] = df['y'].rolling(window=50).mean()
             df['200_Day_Moving_Average'] = df['y'].rolling(window=200).mean()
             
-            m = Prophet(daily_seasonality=False, yearly_seasonality=True, changepoint_prior_scale=0.015, changepoint_range=0.90).fit(df[['ds', 'y']])
+            # --- MODIFIED PROPHET CONFIGURATION (more fluctuation) ---
+            m = Prophet(
+                daily_seasonality=False,
+                weekly_seasonality=True,          # Add weekly fluctuations
+                yearly_seasonality=True,
+                changepoint_prior_scale=0.1,       # Higher = more trend changes
+                changepoint_range=0.90,
+                seasonality_mode='multiplicative'   # Better for growth stocks
+            )
+            m.add_seasonality(name='monthly', period=30.5, fourier_order=5)
+            m.fit(df[['ds', 'y']])
             future = m.make_future_dataframe(periods=180) 
             forecast = m.predict(future)
             
@@ -178,13 +306,24 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             ai_roi_30 = ((target_p_30 - cur_p) / cur_p) * 100
             
             rsi, fibs = calculate_technicals(df)
-            news_score, headlines = get_news_sentiment(ticker)
+            
+            # --- ENHANCED NEWS ---
+            all_news = get_enhanced_news(ticker)
+            impactful_news = filter_impactful_news(all_news)
+            # Also keep a few headlines for the side panel (original behaviour)
+            headlines_display = [f"{'🟢' if n['sentiment']>0 else '🔴' if n['sentiment']<0 else '⚪'} {n['headline']}" for n in all_news[:5]]
+            
+            # Compute average sentiment from impactful news (optional, not used in scoring)
+            if impactful_news:
+                avg_news_sentiment = np.mean([n['sentiment'] for n in impactful_news])
+            else:
+                avg_news_sentiment = 0
             
             score = 15 
             if not is_death_cross: score += 20 
             if health['ROE'] > 0.12: score += 20 
             if ai_roi_30 > 0.5: score += 30 
-            if news_score > 0: score += 15
+            if avg_news_sentiment > 0: score += 15   # simple boost from positive news
             score = max(0, min(100, score))
             
             if score >= 70: verdict, v_col, action, pct = "Strong Buy", "v-green", "ACTION: BUY NOW", 25
@@ -224,8 +363,9 @@ if st.sidebar.button("🚀 Run Deep Audit"):
                     "Status": [f"{health['ROE']*100:.1f}%", f"{health['PB']}x", health['Debt'], health['CurrentRatio']],
                     "Rating": ["✅ Prime" if health['ROE'] > 0.15 else "⚠️ Weak", "✅ Healthy" if health['PB'] < 3.0 else "⚠️ Expensive", "✅ Safe", "✅ Liquid"]
                 }))
-                st.markdown("### 📰 Latest News Impact")
-                for h in headlines: st.markdown(f'<div class="news-card">{h}</div>', unsafe_allow_html=True)
+                st.markdown("### 📰 Recent Headlines")
+                for h in headlines_display: 
+                    st.markdown(f'<div class="news-card">{h}</div>', unsafe_allow_html=True)
 
             with col_r:
                 st.markdown("### ⚖️ Strategy & Fibonacci Limits")
@@ -238,6 +378,19 @@ if st.sidebar.button("🚀 Run Deep Audit"):
                     <div class="fib-box">🔹 Target 2 (0.500): {sym}{fibs['0.500']*fx:,.2f}</div>
                     <div class="fib-box">🔹 Target 3 (0.618): {sym}{fibs['0.618']*fx:,.2f}</div>
                 </div>""", unsafe_allow_html=True)
+
+            # --- NEW: Impactful News Section ---
+            if impactful_news:
+                st.markdown("### 🔥 News Likely to Impact Price")
+                for news in impactful_news[:7]:  # show up to 7
+                    emoji = '🟢' if news['sentiment'] > 0.1 else '🔴' if news['sentiment'] < -0.1 else '⚪'
+                    date_str = news['date'].strftime("%b %d, %Y")
+                    st.markdown(f"""
+                    <div class="impact-news">
+                        <b>{emoji} {news['headline']}</b><br>
+                        <span style="font-size:0.85rem;">{date_str} · {news['source']} · Sentiment: {news['sentiment']:.2f}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
 
             st.markdown("---")
             st.subheader("🤖 AI Stock 180-Day Projection (Full Moving Average Labels)")
@@ -263,4 +416,9 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             vol_ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
             st.pyplot(vol_fig)
             
-        else: st.error("Data Unreachable. Check Symbol.")
+            # Volume insight message
+            vol_message = volume_trend_message(vol_df)
+            st.info(f"📈 **Volume Insight:** {vol_message}")
+            
+        else: 
+            st.error("Data Unreachable. Check Symbol.")
