@@ -42,7 +42,7 @@ st.markdown("""
 
 # 2. DISCLAIMER
 st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders. AI projections are mathematical and adjusted for market volatility.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (V9.1)")
+st.title("🏛️ Strategic AI Investment Architect (V9.3)")
 
 # 3. HELPER ENGINES
 def get_exchange_rate(from_curr, to_curr):
@@ -235,7 +235,7 @@ def volume_trend_message(df_vol):
 
 # 4. SIDEBAR
 st.sidebar.header("⚙️ Configuration")
-user_query = st.sidebar.text_input("Ticker / Symbol", value="NVDA")
+user_query = st.sidebar.text_input("Ticker / Symbol", value="NVDA")  # default ticker (can be changed)
 display_currency = st.sidebar.selectbox("Currency", ["USD", "EUR"])
 total_capital = st.sidebar.number_input("Capital", value=10000)
 
@@ -253,20 +253,20 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             df['50_Day_Moving_Average'] = df['y'].rolling(window=50).mean()
             df['200_Day_Moving_Average'] = df['y'].rolling(window=200).mean()
             
-            # --- REVISED PROPHET (stable, positive forecasts) ---
+            # --- OPTIMIZED PROPHET (balanced for most stocks) ---
             m = Prophet(
                 daily_seasonality=False,
-                weekly_seasonality=True,          # keep weekly patterns
+                weekly_seasonality=True,
                 yearly_seasonality=True,
-                changepoint_prior_scale=0.02,     # lower = smoother trend (avoid explosions)
-                changepoint_range=0.90,
-                seasonality_mode='additive'        # additive is safer for positive prices
+                changepoint_prior_scale=0.05,     # good trade-off for most equities
+                changepoint_range=0.9,
+                seasonality_mode='additive'
             )
             m.fit(df[['ds', 'y']])
             future = m.make_future_dataframe(periods=180) 
             forecast = m.predict(future)
             
-            # Ensure forecasted prices are never negative (just in case)
+            # Ensure no negative prices
             forecast['yhat'] = forecast['yhat'].clip(lower=0)
             forecast['yhat_lower'] = forecast['yhat_lower'].clip(lower=0)
             forecast['yhat_upper'] = forecast['yhat_upper'].clip(lower=0)
@@ -292,7 +292,7 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             # 30-day target (30th future day)
             target_p_30 = forecast['yhat'].iloc[len(df) + 29] * fx
             if is_death_cross: 
-                target_p_30 *= 0.96   # small penalty for death cross
+                target_p_30 *= 0.96  # slight penalty for death cross
             ai_roi_30 = ((target_p_30 - cur_p) / cur_p) * 100
             
             rsi, fibs = calculate_technicals(df)
@@ -400,19 +400,16 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             st.subheader("📊 12-Month Relative Volume Trend")
             vol_fig, vol_ax = plt.subplots(figsize=(12, 4))
             vol_df = df.tail(252).copy() 
-            # Color: green if price increased from previous day, red if decreased
             colors = ['#2e7d32' if i > 0 and vol_df.iloc[i]['y'] >= vol_df.iloc[i-1]['y'] else '#c62828' for i in range(len(vol_df))]
             vol_ax.bar(vol_df['ds'], vol_df['vol'], color=colors, alpha=0.7)
             vol_ax.set_ylabel("Shares Traded")
             vol_ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
             st.pyplot(vol_fig)
             
-            # Explanation of volume colors
             st.caption("🔵 **Volume color:** Green bars = price increased from previous day; Red bars = price decreased from previous day. "
                        "High volume on green days confirms buying interest; high volume on red days signals selling pressure. "
                        "The message below summarises the volume‑price relationship over the last 12 months.")
             
-            # Volume insight message
             vol_message = volume_trend_message(vol_df)
             st.info(f"📈 **Volume Insight:** {vol_message}")
             
