@@ -42,7 +42,7 @@ st.markdown("""
 
 # 2. DISCLAIMER
 st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders. AI projections are mathematical and adjusted for market volatility.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (V9.4)")
+st.title("🏛️ Strategic AI Investment Architect (V9.5)")
 
 # 3. HELPER ENGINES
 def get_exchange_rate(from_curr, to_curr):
@@ -253,23 +253,25 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             df['50_Day_Moving_Average'] = df['y'].rolling(window=50).mean()
             df['200_Day_Moving_Average'] = df['y'].rolling(window=200).mean()
             
-            # --- ENHANCED PROPHET (flexible for growth stocks like CRWD) ---
+            # --- BALANCED PROPHET (good fit, no zero forecasts) ---
             m = Prophet(
                 daily_seasonality=False,
                 weekly_seasonality=True,
                 yearly_seasonality=True,
-                changepoint_prior_scale=0.1,       # higher flexibility for rapid trends
+                changepoint_prior_scale=0.08,      # balanced flexibility
                 changepoint_range=0.9,
-                seasonality_mode='multiplicative'   # lets seasonal swings scale with price
+                seasonality_mode='additive'         # avoids multiplicative extremes
             )
             m.fit(df[['ds', 'y']])
             future = m.make_future_dataframe(periods=180) 
             forecast = m.predict(future)
             
-            # Ensure no negative prices (safety net)
-            forecast['yhat'] = forecast['yhat'].clip(lower=0)
-            forecast['yhat_lower'] = forecast['yhat_lower'].clip(lower=0)
-            forecast['yhat_upper'] = forecast['yhat_upper'].clip(lower=0)
+            # Apply reasonable bounds to avoid extreme forecasts
+            hist_min = df['y'].min()
+            hist_max = df['y'].max()
+            forecast['yhat'] = forecast['yhat'].clip(lower=hist_min * 0.01, upper=hist_max * 3)
+            forecast['yhat_lower'] = forecast['yhat_lower'].clip(lower=hist_min * 0.01, upper=hist_max * 3)
+            forecast['yhat_upper'] = forecast['yhat_upper'].clip(lower=hist_min * 0.01, upper=hist_max * 3)
             
             # --- Deviation & Fair Value Range ---
             trend_val = forecast[forecast['ds'] == df['ds'].iloc[-1]]['yhat'].values[0] * fx
