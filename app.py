@@ -10,7 +10,6 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import datetime
 import yfinance as yf
-import time
 
 # 1. UI SETUP & THEME-AWARE CSS
 st.set_page_config(page_title="Strategic AI Investment Architect", layout="wide")
@@ -43,7 +42,7 @@ st.markdown("""
 
 # 2. DISCLAIMER
 st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders. AI projections are mathematical and adjusted for market volatility.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (V9.0)")
+st.title("🏛️ Strategic AI Investment Architect (V9.1)")
 
 # 3. HELPER ENGINES
 def get_exchange_rate(from_curr, to_curr):
@@ -72,15 +71,11 @@ def resolve_smart_ticker(user_input):
     except: pass
     return ticker_str, ticker_str, ".US", "USD"
 
-# --- Enhanced News Fetching (Finviz + Yahoo Finance) ---
+# Enhanced News Fetching (Finviz + Yahoo Finance)
 def get_enhanced_news(ticker):
-    """
-    Fetch news from Finviz and Yahoo Finance, compute sentiment,
-    and return a list of dicts with 'date', 'headline', 'sentiment', 'source'.
-    """
     headlines = []
     
-    # 1. Finviz news
+    # Finviz news
     try:
         url = f"https://finviz.com/quote.ashx?t={ticker}"
         headers = {'User-Agent': 'Mozilla/5.0'}
@@ -89,19 +84,15 @@ def get_enhanced_news(ticker):
         news_table = soup.find(id='news-table')
         if news_table:
             rows = news_table.find_all('tr')
-            for row in rows[:10]:  # get up to 10
+            for row in rows[:10]:
                 try:
-                    # Finviz format: <td>...<a>headline</a></td>
                     a_tag = row.find('a')
                     if a_tag and a_tag.text:
                         headline = a_tag.text
-                        # date is in preceding <td> maybe
                         date_td = row.find('td', class_='nn-date')
                         date_str = date_td.text if date_td else ""
-                        # parse date (rough)
                         if date_str:
                             try:
-                                # often like "Mar-01-25 09:00AM"
                                 dt = datetime.datetime.strptime(date_str, "%b-%d-%y %I:%M%p")
                             except:
                                 dt = datetime.datetime.now()
@@ -119,7 +110,7 @@ def get_enhanced_news(ticker):
     except Exception as e:
         st.warning(f"Finviz news unavailable: {e}")
 
-    # 2. Yahoo Finance news
+    # Yahoo Finance news
     try:
         ticker_obj = yf.Ticker(ticker)
         yf_news = ticker_obj.news
@@ -128,7 +119,6 @@ def get_enhanced_news(ticker):
                 title = item.get('title', '')
                 if not title:
                     continue
-                # timestamp is in 'providerPublishTime' (seconds)
                 ts = item.get('providerPublishTime')
                 if ts:
                     dt = datetime.datetime.fromtimestamp(ts)
@@ -146,23 +136,17 @@ def get_enhanced_news(ticker):
     except Exception as e:
         st.warning(f"Yahoo Finance news unavailable: {e}")
 
-    # Remove duplicates (by headline)
+    # Remove duplicates
     unique = []
     seen = set()
     for h in headlines:
         if h['headline'] not in seen:
             seen.add(h['headline'])
             unique.append(h)
-    # Sort by date (most recent first)
     unique.sort(key=lambda x: x['date'], reverse=True)
     return unique
 
 def filter_impactful_news(news_list, threshold=0.3, keywords=None):
-    """
-    Return news items that are either:
-    - absolute sentiment > threshold, or
-    - headline contains any of the provided keywords (case‑insensitive).
-    """
     if keywords is None:
         keywords = ['earnings', 'dividend', 'fed', 'revenue', 'lawsuit', 'sec',
                     'merger', 'acquisition', 'growth', 'crash', 'ai', 'claude',
@@ -218,7 +202,7 @@ def get_fundamental_health(ticker, suffix):
         return df, health
     except: return None, None
 
-# --- Volume trend interpretation function ---
+# Volume trend interpretation
 def volume_trend_message(df_vol):
     if df_vol.empty or len(df_vol) < 20:
         return "Insufficient volume data."
@@ -238,7 +222,7 @@ def volume_trend_message(df_vol):
         return "Neutral volume pattern (recent price action too one‑sided)."
     
     up_confirmation = up_vol_up / total_up
-    down_confirmation = down_vol_up / total_down  # rising volume on down days is bearish
+    down_confirmation = down_vol_up / total_down
     
     if up_confirmation > 0.6 and down_confirmation < 0.4:
         return "✅ Volume confirms uptrend: rising prices on rising volume, falling prices on falling volume – bullish."
@@ -269,19 +253,23 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             df['50_Day_Moving_Average'] = df['y'].rolling(window=50).mean()
             df['200_Day_Moving_Average'] = df['y'].rolling(window=200).mean()
             
-            # --- MODIFIED PROPHET CONFIGURATION (more fluctuation) ---
+            # --- REVISED PROPHET (stable, positive forecasts) ---
             m = Prophet(
                 daily_seasonality=False,
-                weekly_seasonality=True,          # Add weekly fluctuations
+                weekly_seasonality=True,          # keep weekly patterns
                 yearly_seasonality=True,
-                changepoint_prior_scale=0.1,       # Higher = more trend changes
+                changepoint_prior_scale=0.02,     # lower = smoother trend (avoid explosions)
                 changepoint_range=0.90,
-                seasonality_mode='multiplicative'   # Better for growth stocks
+                seasonality_mode='additive'        # additive is safer for positive prices
             )
-            m.add_seasonality(name='monthly', period=30.5, fourier_order=5)
             m.fit(df[['ds', 'y']])
             future = m.make_future_dataframe(periods=180) 
             forecast = m.predict(future)
+            
+            # Ensure forecasted prices are never negative (just in case)
+            forecast['yhat'] = forecast['yhat'].clip(lower=0)
+            forecast['yhat_lower'] = forecast['yhat_lower'].clip(lower=0)
+            forecast['yhat_upper'] = forecast['yhat_upper'].clip(lower=0)
             
             # --- Deviation & Fair Value Range ---
             trend_val = forecast[forecast['ds'] == df['ds'].iloc[-1]]['yhat'].values[0] * fx
@@ -301,29 +289,30 @@ if st.sidebar.button("🚀 Run Deep Audit"):
                     cross_point = (df['ds'].iloc[i], df['50_Day_Moving_Average'].iloc[i], "DEATH")
                     crossover_msg = "⚠️ DEATH CROSS: 50-Day Moving Average crossed BELOW 200-Day."
 
+            # 30-day target (30th future day)
             target_p_30 = forecast['yhat'].iloc[len(df) + 29] * fx
-            if is_death_cross: target_p_30 *= 0.96 
+            if is_death_cross: 
+                target_p_30 *= 0.96   # small penalty for death cross
             ai_roi_30 = ((target_p_30 - cur_p) / cur_p) * 100
             
             rsi, fibs = calculate_technicals(df)
             
-            # --- ENHANCED NEWS ---
+            # Enhanced news
             all_news = get_enhanced_news(ticker)
             impactful_news = filter_impactful_news(all_news)
-            # Also keep a few headlines for the side panel (original behaviour)
             headlines_display = [f"{'🟢' if n['sentiment']>0 else '🔴' if n['sentiment']<0 else '⚪'} {n['headline']}" for n in all_news[:5]]
             
-            # Compute average sentiment from impactful news (optional, not used in scoring)
             if impactful_news:
                 avg_news_sentiment = np.mean([n['sentiment'] for n in impactful_news])
             else:
                 avg_news_sentiment = 0
             
+            # Conviction score
             score = 15 
             if not is_death_cross: score += 20 
             if health['ROE'] > 0.12: score += 20 
             if ai_roi_30 > 0.5: score += 30 
-            if avg_news_sentiment > 0: score += 15   # simple boost from positive news
+            if avg_news_sentiment > 0: score += 15
             score = max(0, min(100, score))
             
             if score >= 70: verdict, v_col, action, pct = "Strong Buy", "v-green", "ACTION: BUY NOW", 25
@@ -379,10 +368,10 @@ if st.sidebar.button("🚀 Run Deep Audit"):
                     <div class="fib-box">🔹 Target 3 (0.618): {sym}{fibs['0.618']*fx:,.2f}</div>
                 </div>""", unsafe_allow_html=True)
 
-            # --- NEW: Impactful News Section ---
+            # Impactful News Section
             if impactful_news:
                 st.markdown("### 🔥 News Likely to Impact Price")
-                for news in impactful_news[:7]:  # show up to 7
+                for news in impactful_news[:7]:
                     emoji = '🟢' if news['sentiment'] > 0.1 else '🔴' if news['sentiment'] < -0.1 else '⚪'
                     date_str = news['date'].strftime("%b %d, %Y")
                     st.markdown(f"""
@@ -393,7 +382,7 @@ if st.sidebar.button("🚀 Run Deep Audit"):
                     """, unsafe_allow_html=True)
 
             st.markdown("---")
-            st.subheader("🤖 AI Stock 180-Day Projection (Full Moving Average Labels)")
+            st.subheader("🤖 AI Stock 180-Day Projection")
             fig, ax = plt.subplots(figsize=(12, 6))
             forecast_plot = forecast.copy()
             forecast_plot[['yhat', 'yhat_lower', 'yhat_upper']] *= fx
@@ -404,17 +393,24 @@ if st.sidebar.button("🚀 Run Deep Audit"):
                 ax.scatter(cross_point[0], cross_point[1] * fx, color='gold', s=300, marker='*', label=f"{cross_point[2]} CROSS POINT", zorder=5)
             ax.set_xlim([datetime.datetime.now() - datetime.timedelta(days=180), datetime.datetime.now() + datetime.timedelta(days=180)])
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
-            plt.legend(loc='upper left'); st.pyplot(fig)
+            plt.legend(loc='upper left')
+            st.pyplot(fig)
 
             st.markdown("---")
             st.subheader("📊 12-Month Relative Volume Trend")
             vol_fig, vol_ax = plt.subplots(figsize=(12, 4))
             vol_df = df.tail(252).copy() 
+            # Color: green if price increased from previous day, red if decreased
             colors = ['#2e7d32' if i > 0 and vol_df.iloc[i]['y'] >= vol_df.iloc[i-1]['y'] else '#c62828' for i in range(len(vol_df))]
             vol_ax.bar(vol_df['ds'], vol_df['vol'], color=colors, alpha=0.7)
             vol_ax.set_ylabel("Shares Traded")
             vol_ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
             st.pyplot(vol_fig)
+            
+            # Explanation of volume colors
+            st.caption("🔵 **Volume color:** Green bars = price increased from previous day; Red bars = price decreased from previous day. "
+                       "High volume on green days confirms buying interest; high volume on red days signals selling pressure. "
+                       "The message below summarises the volume‑price relationship over the last 12 months.")
             
             # Volume insight message
             vol_message = volume_trend_message(vol_df)
