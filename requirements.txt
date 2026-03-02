@@ -11,5 +11,5 @@ matplotlib==3.7.2
 openpyxl==3.1.2
 xlrd==2.0.1
 reticker==3.1.6
-pypdf==4.0.1          # For PDF text extraction (no system deps)
-python-docx==0.8.11   # For Word documents
+pypdf==4.0.1
+python-docx==0.8.11
