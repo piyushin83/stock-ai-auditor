@@ -75,7 +75,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders. AI projections are mathematical and adjusted for market volatility.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (V11.3 - Error Robust)")
+st.title("🏛️ Strategic AI Investment Architect (V11.4 - Final)")
 
 # 3. RATE LIMITER
 class RateLimiter:
@@ -122,13 +122,19 @@ def resolve_smart_ticker(user_input):
         t_obj = yf.Ticker(ticker_str)
         if t_obj.fast_info.get('lastPrice') is not None:
             name = t_obj.info.get('longName', ticker_str)
+            # Ensure name is not empty
+            if not name:
+                name = ticker_str
             curr = t_obj.fast_info.get('currency', 'USD')
             return ticker_str, name, ".US", curr, None
         rate_limiter.wait()
         s = yf.Search(ticker_str, max_results=1)
         if s.tickers:
             res = s.tickers[0]
-            ticker = res['symbol']; name = res.get('longname', ticker)
+            ticker = res['symbol']
+            name = res.get('longname', ticker)
+            if not name:
+                name = ticker
             t_obj_fb = yf.Ticker(ticker)
             native_curr = t_obj_fb.fast_info.get('currency', 'USD')
             return ticker, name, "", native_curr, None
@@ -412,8 +418,11 @@ def analyze_ticker_basic(ticker, display_currency):
         currency = info.get('currency', 'USD')
         fx = get_exchange_rate(currency, display_currency)
         price_display = price * fx
+        name = info.get('longName', ticker)
+        if not name:
+            name = ticker
         return {
-            'name': info.get('longName', ticker),
+            'name': name,
             'sector': info.get('sector', 'Unknown'),
             'price': price_display,
             'currency': currency
@@ -556,10 +565,6 @@ if st.sidebar.button("🚀 Run Deep Audit"):
                 fair_low = cur_p * 0.95
                 fair_high = cur_p * 1.05
                 target_p_30 = cur_p * 1.05  # simple 5% growth
-            finally:
-                # Ensure target is defined even if forecast failed
-                if 'target_p_30' not in locals():
-                    target_p_30 = cur_p * 1.05
             
             # Moving average cross detection
             is_death_cross = df['50_Day_Moving_Average'].iloc[-1] < df['200_Day_Moving_Average'].iloc[-1]
@@ -747,7 +752,7 @@ if uploaded_file is not None:
         status_text.empty()
         
         if errors_list:
-            with st.expander("⚠️ Errors encountered"):
+            with st.expander("⚠️ Errors encountered during analysis"):
                 for err in errors_list:
                     st.write(err)
         
@@ -791,4 +796,6 @@ if uploaded_file is not None:
                     for s in suggestions:
                         st.info(s)
         else:
-            st.error("No valid tickers could be analyzed.")
+            st.error("No valid tickers could be analyzed. Check the file format and ticker symbols.")
+    else:
+        st.error("Failed to process the uploaded file. See details above.")
