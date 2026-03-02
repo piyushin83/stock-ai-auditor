@@ -17,15 +17,19 @@ import os
 from pathlib import Path
 import re
 
-# Document extraction libraries (pure Python, no system deps)
+# Document/image extraction
 try:
     from pypdf import PdfReader
     import docx
     import reticker
-    DOC_EXTRACTION_AVAILABLE = True
+    import easyocr
+    import torch  # required by easyocr
+    OCR_AVAILABLE = True
+    # Initialize reader once (lazy loading)
+    reader = None
 except ImportError:
-    DOC_EXTRACTION_AVAILABLE = False
-    st.warning("For PDF/Word upload, install: pypdf, python-docx, reticker")
+    OCR_AVAILABLE = False
+    st.warning("For image OCR, install: easyocr, torch. PDF/Word extraction requires pypdf, python-docx, reticker.")
 
 # 1. UI SETUP & THEME-AWARE CSS
 st.set_page_config(page_title="Strategic AI Investment Architect", layout="wide")
@@ -56,11 +60,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 2. DISCLAIMER
 st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders. AI projections are mathematical and adjusted for market volatility.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (V10.1 - Enhanced PDF Feedback)")
+st.title("🏛️ Strategic AI Investment Architect (V11.0 - OCR & Diversification)")
 
-# 3. RATE LIMITER (to avoid Yahoo Finance 429)
+# 3. RATE LIMITER
 class RateLimiter:
     def __init__(self, calls_per_second=0.3):
         self.calls_per_second = calls_per_second
@@ -77,7 +80,7 @@ class RateLimiter:
 
 rate_limiter = RateLimiter(calls_per_second=0.3)
 
-# 4. HELPER FUNCTIONS (same as your original, with rate limiting)
+# 4. HELPER FUNCTIONS (same as before)
 @st.cache_data(ttl=3600)
 def get_exchange_rate(from_curr, to_curr):
     if from_curr == to_curr: return 1.0
@@ -144,7 +147,7 @@ def get_enhanced_news(ticker):
                     continue
     except:
         pass
-    # Yahoo Finance (rate limited)
+    # Yahoo Finance
     try:
         rate_limiter.wait()
         ticker_obj = yf.Ticker(ticker)
@@ -162,7 +165,6 @@ def get_enhanced_news(ticker):
                 continue
     except:
         pass
-    # Remove duplicates
     unique = []
     seen = set()
     for h in headlines:
@@ -252,10 +254,11 @@ def volume_trend_message(df_vol):
     else:
         return "➡️ Neutral volume trend."
 
-# 5. DOCUMENT EXTRACTION CLASS (Enhanced with debug info)
-class DocumentPortfolioExtractor:
+# 5. DOCUMENT/IMAGE EXTRACTION CLASS (Enhanced with OCR)
+class PortfolioExtractor:
     def __init__(self):
-        if DOC_EXTRACTION_AVAILABLE:
+        self.ticker_extractor = None
+        if 'reticker' in globals():
             self.ticker_extractor = reticker.TickerExtractor(
                 deduplicate=True,
                 match_config=reticker.TickerMatchConfig(
@@ -266,20 +269,22 @@ class DocumentPortfolioExtractor:
                     separators="-."
                 )
             )
-        else:
-            self.ticker_extractor = None
+        self.ocr_reader = None
+        if OCR_AVAILABLE:
+            # Lazy load OCR reader to avoid startup delay
+            pass
+
+    def _get_ocr_reader(self):
+        if self.ocr_reader is None and OCR_AVAILABLE:
+            self.ocr_reader = easyocr.Reader(['en'])  # only English
+        return self.ocr_reader
 
     def extract_text_from_pdf(self, file_path):
         try:
             reader = PdfReader(file_path)
-            text = ""
-            for page in reader.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
+            text = "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
             return text
         except Exception as e:
-            st.warning(f"PDF extraction error: {e}")
             return ""
 
     def extract_text_from_docx(self, file_path):
@@ -287,30 +292,58 @@ class DocumentPortfolioExtractor:
             doc = docx.Document(file_path)
             return "\n".join([para.text for para in doc.paragraphs])
         except Exception as e:
-            st.warning(f"DOCX extraction error: {e}")
+            return ""
+
+    def extract_text_from_image(self, file_path):
+        """OCR using easyocr"""
+        if not OCR_AVAILABLE:
+            return ""
+        reader = self._get_ocr_reader()
+        if reader is None:
+            return ""
+        try:
+            result = reader.readtext(file_path, detail=0, paragraph=True)
+            return "\n".join(result)
+        except Exception as e:
+            st.warning(f"OCR error: {e}")
             return ""
 
     def find_tickers_regex(self, text):
-        # Pattern for common stock tickers (1-5 uppercase letters)
         pattern = r'\b[A-Z]{1,5}\b'
         matches = re.findall(pattern, text)
-        # Blacklist common false positives
         blacklist = {'ETF', 'USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'THE', 'AND', 'FOR', 'INC', 'LTD', 'LLC', 'NYSE', 'NASDAQ'}
-        return [m for m in matches if m not in blacklist]
+        return list(set([m for m in matches if m not in blacklist]))
 
-    def process_document(self, file_path):
+    def extract_quantities(self, text, ticker):
+        """Find share count near ticker mentions."""
+        patterns = [
+            rf'{ticker}\s+(\d+(?:\.\d+)?)',            # AAPL 100
+            rf'(\d+(?:\.\d+)?)\s+{ticker}',            # 100 AAPL
+            rf'\${ticker}\s+(\d+(?:\.\d+)?)',          # $AAPL 100
+            rf'(\d+(?:\.\d+)?)\s+shares?\s+of\s+{ticker}',  # 100 shares of AAPL
+            rf'{ticker}\s+shares?\s+(\d+(?:\.\d+)?)',  # AAPL shares 100
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match and match.groups():
+                return float(match.group(1))
+        return 1.0  # default
+
+    def process_file(self, file_path):
         ext = Path(file_path).suffix.lower()
+        text = ""
         if ext == '.pdf':
             text = self.extract_text_from_pdf(file_path)
         elif ext in ['.docx', '.doc']:
             text = self.extract_text_from_docx(file_path)
+        elif ext in ['.png', '.jpg', '.jpeg', '.tiff', '.bmp']:
+            text = self.extract_text_from_image(file_path)
         else:
             return [], "Unsupported file type", ""
 
         if not text.strip():
-            return [], "No text could be extracted. The file may be scanned (image-based) or empty.", ""
+            return [], "No text could be extracted. File may be empty, scanned (image), or corrupted.", ""
 
-        # Show preview of extracted text (for debugging)
         preview = text[:1000] + "..." if len(text) > 1000 else text
 
         # Find tickers
@@ -318,33 +351,31 @@ class DocumentPortfolioExtractor:
             raw_tickers = self.ticker_extractor.extract(text)
         else:
             raw_tickers = self.find_tickers_regex(text)
+        raw_tickers = list(set(raw_tickers))  # dedup
 
-        # Remove duplicates
-        raw_tickers = list(set(raw_tickers))
-
-        # Validate with yFinance
+        # Validate with yFinance and extract quantities
         holdings = []
-        for ticker in raw_tickers[:15]:  # Limit to 15 to avoid rate limits
+        for ticker in raw_tickers[:15]:
             try:
                 rate_limiter.wait()
                 t_obj = yf.Ticker(ticker)
                 info = t_obj.info
                 if info.get('regularMarketPrice'):
+                    shares = self.extract_quantities(text, ticker)
                     holdings.append({
                         'ticker': ticker,
                         'name': info.get('longName', ticker),
-                        'shares': 1,  # Default; we could try to extract numbers but keep simple
+                        'shares': shares,
                         'sector': info.get('sector', 'Unknown'),
                         'current_price': info.get('regularMarketPrice')
                     })
-            except Exception as e:
+            except Exception:
                 continue
 
         return holdings, preview, f"Found {len(raw_tickers)} potential tickers, {len(holdings)} validated."
 
-# 6. PORTFOLIO ANALYSIS FUNCTIONS
+# 6. PORTFOLIO ANALYSIS & DIVERSIFICATION SUGGESTIONS
 def analyze_ticker_basic(ticker, display_currency):
-    """Simplified analysis for portfolio use (no Prophet)"""
     try:
         rate_limiter.wait()
         t_obj = yf.Ticker(ticker)
@@ -364,14 +395,44 @@ def analyze_ticker_basic(ticker, display_currency):
     except:
         return None
 
-def process_uploaded_file(uploaded_file):
-    """Handle any uploaded file: CSV, Excel, PDF, Word"""
-    file_name = uploaded_file.name.lower()
+def suggest_diversification(current_sectors, total_value, top_holdings=5):
+    """
+    Suggest sectors to add and provide example stocks/ETFs.
+    current_sectors: dict {sector: allocation_percentage}
+    """
+    suggestions = []
+    # Common sectors with example ETFs/tickers
+    sector_examples = {
+        'Technology': ['AAPL', 'MSFT', 'QQQ'],
+        'Healthcare': ['JNJ', 'UNH', 'XLV'],
+        'Financial Services': ['JPM', 'BAC', 'XLF'],
+        'Consumer Cyclical': ['AMZN', 'TSLA', 'XLY'],
+        'Industrials': ['HON', 'CAT', 'XLI'],
+        'Energy': ['XOM', 'CVX', 'XLE'],
+        'Utilities': ['NEE', 'DUK', 'XLU'],
+        'Real Estate': ['PLD', 'AMT', 'XLRE'],
+        'Communication Services': ['META', 'GOOGL', 'XLC'],
+        'Consumer Defensive': ['PG', 'KO', 'XLP'],
+        'Basic Materials': ['LIN', 'BHP', 'XLB']
+    }
+    # Identify sectors with allocation < 10% (or missing)
+    allocated_sectors = set(current_sectors.keys())
+    for sector, examples in sector_examples.items():
+        if sector not in allocated_sectors:
+            suggestions.append(f"💡 No exposure to **{sector}**. Consider adding {', '.join(examples[:3])}")
+        elif current_sectors[sector] < 10:
+            suggestions.append(f"💡 Low allocation ({current_sectors[sector]:.1f}%) to **{sector}**. Consider increasing via {', '.join(examples[:2])}")
+    return suggestions[:5]  # limit to 5 suggestions
 
-    # CSV / Excel
-    if file_name.endswith('.csv') or file_name.endswith(('.xlsx', '.xls')):
+def process_uploaded_file(uploaded_file):
+    """Handle CSV, Excel, PDF, Word, Images"""
+    file_name = uploaded_file.name.lower()
+    ext = Path(file_name).suffix
+
+    # CSV/Excel
+    if ext in ['.csv', '.xlsx', '.xls']:
         try:
-            if file_name.endswith('.csv'):
+            if ext == '.csv':
                 df = pd.read_csv(uploaded_file)
             else:
                 df = pd.read_excel(uploaded_file)
@@ -381,23 +442,25 @@ def process_uploaded_file(uploaded_file):
                 return None
             if 'shares' not in df.columns:
                 df['shares'] = 1
+            # Optional purchase price
+            if 'purchase price' in df.columns:
+                df['purchase price'] = pd.to_numeric(df['purchase price'], errors='coerce')
             return {'type': 'tabular', 'data': df, 'preview': None}
         except Exception as e:
             st.error(f"Error reading file: {e}")
             return None
 
-    # PDF / Word
-    elif DOC_EXTRACTION_AVAILABLE and (file_name.endswith('.pdf') or file_name.endswith(('.docx', '.doc'))):
-        # Save to temp file
+    # PDF/Word/Image
+    elif ext in ['.pdf', '.docx', '.doc', '.png', '.jpg', '.jpeg', '.tiff', '.bmp']:
+        extractor = PortfolioExtractor()
+        # Save temp file
         temp_path = f"temp_{uploaded_file.name}"
         with open(temp_path, 'wb') as f:
             f.write(uploaded_file.getbuffer())
-        extractor = DocumentPortfolioExtractor()
-        holdings, preview, message = extractor.process_document(temp_path)
+        holdings, preview, message = extractor.process_file(temp_path)
         os.remove(temp_path)
 
-        # Show extraction details (expandable)
-        with st.expander("📄 Document Extraction Details"):
+        with st.expander("📄 Extraction Details"):
             st.text(message)
             st.text("Extracted text preview:")
             st.code(preview)
@@ -406,10 +469,10 @@ def process_uploaded_file(uploaded_file):
             df = pd.DataFrame(holdings)
             return {'type': 'tabular', 'data': df, 'preview': preview}
         else:
-            st.warning("No valid stock tickers found in the document. The document may be scanned or contain no recognizable tickers.")
+            st.warning("No valid stock tickers found in the document/image.")
             return None
     else:
-        st.error("Unsupported file type. Please upload CSV, Excel, PDF, or Word document.")
+        st.error("Unsupported file type. Upload CSV, Excel, PDF, Word, or image (PNG/JPG).")
         return None
 
 # 7. SIDEBAR
@@ -421,13 +484,13 @@ total_capital = st.sidebar.number_input("Capital", value=10000)
 st.sidebar.markdown("---")
 st.sidebar.header("📁 Upload Portfolio / Document")
 uploaded_file = st.sidebar.file_uploader(
-    "Upload CSV, Excel, PDF, or Word", 
-    type=['csv', 'xlsx', 'xls', 'pdf', 'docx', 'doc']
+    "CSV, Excel, PDF, Word, or Image", 
+    type=['csv', 'xlsx', 'xls', 'pdf', 'docx', 'doc', 'png', 'jpg', 'jpeg', 'tiff', 'bmp']
 )
 
-# 8. MAIN EXECUTION - SINGLE TICKER (same as original, triggered by button)
+# 8. SINGLE TICKER DEEP AUDIT (unchanged)
 if st.sidebar.button("🚀 Run Deep Audit"):
-    with st.spinner(f"Analyzing {user_query}... (this may take a moment)"):
+    with st.spinner(f"Analyzing {user_query}... (may take a moment)"):
         ticker, name, suffix, native_curr = resolve_smart_ticker(user_query)
         df, health = get_fundamental_health(ticker, suffix)
         if df is not None:
@@ -438,7 +501,6 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             df['50_Day_Moving_Average'] = df['y'].rolling(window=50).mean()
             df['200_Day_Moving_Average'] = df['y'].rolling(window=200).mean()
             
-            # Prophet
             m = Prophet(daily_seasonality=False, weekly_seasonality=True, yearly_seasonality=True,
                         changepoint_prior_scale=0.08, changepoint_range=0.9, seasonality_mode='additive')
             m.fit(df[['ds', 'y']])
@@ -454,7 +516,6 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             fair_low = trend_val * 0.95
             fair_high = trend_val * 1.05
             
-            # Moving average cross detection
             is_death_cross = df['50_Day_Moving_Average'].iloc[-1] < df['200_Day_Moving_Average'].iloc[-1]
             crossover_msg = "Price stability detected."
             cross_point = None
@@ -477,7 +538,6 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             headlines_display = [f"{'🟢' if n['sentiment']>0 else '🔴' if n['sentiment']<0 else '⚪'} {n['headline']}" for n in all_news[:5]]
             avg_news_sentiment = np.mean([n['sentiment'] for n in impactful_news]) if impactful_news else 0
             
-            # Conviction score
             score = 15
             if not is_death_cross: score += 20
             if health['ROE'] > 0.12: score += 20
@@ -491,7 +551,7 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             
             sl_price = cur_p * (0.95 if rsi > 70 else 0.85 if rsi < 30 else 0.90)
             
-            # --- DISPLAY (same as your original) ---
+            # DISPLAY (same as original)
             st.subheader(f"📊 {name} Analysis ({ticker})")
             col_f1, col_f2 = st.columns(2)
             with col_f1:
@@ -563,7 +623,7 @@ if st.sidebar.button("🚀 Run Deep Audit"):
         else:
             st.error(f"Data Unreachable for {user_query}. Check symbol or try again later.")
 
-# 9. AUTOMATIC PORTFOLIO/DOCUMENT ANALYSIS
+# 9. AUTOMATIC PORTFOLIO ANALYSIS (for any uploaded file)
 if uploaded_file is not None:
     st.markdown("---")
     st.header("📁 Uploaded File Analysis")
@@ -577,12 +637,14 @@ if uploaded_file is not None:
         # Analyze each ticker
         results_list = []
         total_value = 0
+        total_cost = 0
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         for idx, row in df_holdings.iterrows():
             ticker = str(row['ticker']).strip().upper()
             shares = float(row['shares']) if 'shares' in row else 1
+            purchase_price = row.get('purchase price', None)
             status_text.text(f"Analyzing {ticker}... ({idx+1}/{len(df_holdings)})")
             progress_bar.progress((idx + 1) / len(df_holdings))
             
@@ -590,13 +652,26 @@ if uploaded_file is not None:
             if analysis:
                 value = shares * analysis['price']
                 total_value += value
+                if pd.notna(purchase_price):
+                    # Assume purchase_price is in same currency as current? We'll treat as given.
+                    cost = shares * purchase_price
+                    total_cost += cost
+                    gain = value - cost
+                    gain_pct = (gain / cost) * 100 if cost != 0 else 0
+                else:
+                    gain = None
+                    gain_pct = None
+                
                 results_list.append({
                     'Ticker': ticker,
                     'Name': analysis['name'],
                     'Sector': analysis['sector'],
                     'Shares': shares,
                     'Current Price': analysis['price'],
-                    'Current Value': value
+                    'Current Value': value,
+                    'Purchase Price': purchase_price if pd.notna(purchase_price) else None,
+                    'Gain/Loss $': gain,
+                    'Gain/Loss %': gain_pct
                 })
             else:
                 st.warning(f"Could not analyze {ticker} – skipping.")
@@ -610,12 +685,23 @@ if uploaded_file is not None:
                 df_results['Allocation %'] = (df_results['Current Value'] / total_value * 100)
             
             sym = "$" if display_currency == "USD" else "€"
-            st.metric("Total Portfolio Value", f"{sym}{total_value:,.2f}")
+            st.metric("Total Current Value", f"{sym}{total_value:,.2f}")
+            if total_cost > 0:
+                total_gain = total_value - total_cost
+                total_gain_pct = (total_gain / total_cost) * 100
+                st.metric("Total Cost", f"{sym}{total_cost:,.2f}")
+                st.metric("Total Gain/Loss", f"{sym}{total_gain:,.2f} ({total_gain_pct:.1f}%)")
             
             st.subheader("Holdings")
+            # Format display
             display_df = df_results.copy()
             display_df['Current Price'] = display_df['Current Price'].apply(lambda x: f"{sym}{x:,.2f}")
             display_df['Current Value'] = display_df['Current Value'].apply(lambda x: f"{sym}{x:,.2f}")
+            if 'Purchase Price' in display_df.columns:
+                display_df['Purchase Price'] = display_df['Purchase Price'].apply(lambda x: f"{sym}{x:,.2f}" if pd.notna(x) else "N/A")
+            if 'Gain/Loss $' in display_df.columns:
+                display_df['Gain/Loss $'] = display_df['Gain/Loss $'].apply(lambda x: f"{sym}{x:,.2f}" if pd.notna(x) else "N/A")
+                display_df['Gain/Loss %'] = display_df['Gain/Loss %'].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
             display_df['Allocation %'] = display_df['Allocation %'].apply(lambda x: f"{x:.1f}%" if x>0 else "0%")
             st.dataframe(display_df)
             
@@ -627,5 +713,13 @@ if uploaded_file is not None:
                 ax.pie(sector_data['Current Value'], labels=sector_data['Sector'], autopct='%1.1f%%')
                 ax.axis('equal')
                 st.pyplot(fig)
+                
+                # Generate diversification suggestions
+                sector_alloc_dict = dict(zip(sector_data['Sector'], sector_data['Current Value']/total_value*100))
+                suggestions = suggest_diversification(sector_alloc_dict, total_value)
+                if suggestions:
+                    st.subheader("💡 Diversification Ideas")
+                    for s in suggestions:
+                        st.info(s)
         else:
             st.error("No valid tickers could be analyzed. Check the file format and ticker symbols.")
