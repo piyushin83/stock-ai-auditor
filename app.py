@@ -8,21 +8,22 @@ from textblob import TextBlob
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import datetime
-import yfinance as yf
 import io
 import re
 import tempfile
 import os
 from pathlib import Path
 import time
-import random
 import warnings
 warnings.filterwarnings('ignore')
 
 # Document extraction libraries
-from pypdf import PdfReader
-import docx
-import reticker
+try:
+    from pypdf import PdfReader
+    import docx
+    import reticker
+except ImportError:
+    st.error("Please install required libraries: pypdf, python-docx, reticker")
 
 # -------------------------------
 # 1. UI SETUP & THEME-AWARE CSS
@@ -56,110 +57,75 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders. AI projections are mathematical and adjusted for market volatility.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (V10.5 - No Rate Limits)")
+st.title("🏛️ Strategic AI Investment Architect (V10.6)")
 
 # -------------------------------
-# 2. ALTERNATIVE DATA SOURCES (No Yahoo Finance Rate Limits)
+# 2. INITIALIZE SESSION STATE
 # -------------------------------
+if 'single_ticker' not in st.session_state:
+    st.session_state['single_ticker'] = "AAPL"
+if 'doc_holdings' not in st.session_state:
+    st.session_state['doc_holdings'] = None
+if 'analysis_done' not in st.session_state:
+    st.session_state['analysis_done'] = False
+if 'portfolio_data' not in st.session_state:
+    st.session_state['portfolio_data'] = None
 
+# -------------------------------
+# 3. DATA FETCHING FUNCTIONS (No Yahoo Finance)
+# -------------------------------
 @st.cache_data(ttl=3600)
-def get_stock_price_alternative(ticker):
-    """Get current stock price from alternative sources"""
-    
-    # Try Finviz first (no rate limits)
+def get_stock_price(ticker):
+    """Get current stock price from Finviz"""
     try:
         url = f"https://finviz.com/quote.ashx?t={ticker}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers, timeout=5)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        response = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, 'html.parser')
         
         # Find price in Finviz table
-        price_cell = soup.find('td', string='Price')
+        price_cell = soup.find('td', class_='snapshot-td2', string='Price')
         if price_cell:
             price_value = price_cell.find_next_sibling('td').text
             price = float(price_value.replace(',', ''))
             return price
-    except:
+    except Exception as e:
         pass
     
-    # Try Alpha Vantage if you have API key (optional)
-    # You can add your API key in Streamlit secrets
+    # Try alternative method
     try:
-        api_key = st.secrets.get("ALPHA_VANTAGE_KEY", "demo")
-        url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={ticker}&apikey={api_key}"
-        response = requests.get(url, timeout=5)
-        data = response.json()
-        if "Global Quote" in data and "05. price" in data["Global Quote"]:
-            return float(data["Global Quote"]["05. price"])
-    except:
-        pass
-    
-    # Try IEX Cloud as last resort
-    try:
-        url = f"https://cloud.iexapis.com/stable/stock/{ticker}/quote?token=pk_4c1a2b3c4d5e6f7g8h9i0j"
-        response = requests.get(url, timeout=5)
-        data = response.json()
-        if "latestPrice" in data:
-            return data["latestPrice"]
+        url = f"https://finance.yahoo.com/quote/{ticker}"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=5)
+        if 'regularMarketPrice' in response.text:
+            # Extract price using regex
+            match = re.search(r'regularMarketPrice":\{"raw":(\d+\.?\d*)', response.text)
+            if match:
+                return float(match.group(1))
     except:
         pass
     
     return None
 
-@st.cache_data(ttl=86400)  # Cache for 24 hours
-def get_historical_data_alternative(ticker):
-    """Get historical data from alternative sources"""
-    
-    # Try Yahoo Finance but with longer cache
-    try:
-        # Use stooq as alternative data source (no rate limits)
-        end = datetime.datetime.now()
-        start = end - datetime.timedelta(days=730)  # 2 years
-        df = web.DataReader(f"{ticker}.US", 'stooq', start, end)
-        if not df.empty:
-            df = df.reset_index().rename(columns={'Date': 'ds', 'Close': 'y'})
-            df['ds'] = pd.to_datetime(df['ds'])
-            return df
-    except:
-        pass
-    
-    # Try NASDAQ data
-    try:
-        url = f"https://www.nasdaq.com/api/v1/historical/{ticker}/stocks/2020-01-01/2024-01-01"
-        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            # Process NASDAQ data format
-            # This is simplified - you'd need to parse their actual format
-            pass
-    except:
-        pass
-    
-    return None
-
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=86400)
 def get_company_name(ticker):
-    """Get company name from various sources"""
-    
-    # Try Finviz
+    """Get company name from Finviz"""
     try:
         url = f"https://finviz.com/quote.ashx?t={ticker}"
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=5)
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Find company name in title
         title = soup.find('title')
         if title:
             name = title.text.split('Stock')[0].strip()
             return name
     except:
         pass
-    
     return ticker
 
-@st.cache_data(ttl=3600)
-def get_sector_alternative(ticker):
+@st.cache_data(ttl=86400)
+def get_sector(ticker):
     """Get sector from Finviz"""
     try:
         url = f"https://finviz.com/quote.ashx?t={ticker}"
@@ -167,18 +133,37 @@ def get_sector_alternative(ticker):
         response = requests.get(url, headers=headers, timeout=5)
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        sector_cell = soup.find('td', string='Sector')
-        if sector_cell:
-            return sector_cell.find_next_sibling('td').text
+        # Find sector in the snapshot table
+        rows = soup.find_all('tr', class_='snapshot-td2')
+        for row in rows:
+            cells = row.find_all('td')
+            for i, cell in enumerate(cells):
+                if cell.text == 'Sector' and i + 1 < len(cells):
+                    return cells[i + 1].text
     except:
         pass
-    
     return 'Unknown'
 
-def get_news_alternative(ticker):
-    """Get news from Finviz only (no rate limits)"""
+@st.cache_data(ttl=86400)
+def get_historical_data(ticker):
+    """Get historical data from stooq"""
+    try:
+        end = datetime.datetime.now()
+        start = end - datetime.timedelta(days=365)
+        df = web.DataReader(f"{ticker}.US", 'stooq', start, end)
+        if not df.empty:
+            df = df.reset_index()
+            df = df.rename(columns={'Date': 'ds', 'Close': 'y'})
+            df['ds'] = pd.to_datetime(df['ds'])
+            return df.sort_values('ds')
+    except:
+        pass
+    return None
+
+@st.cache_data(ttl=3600)
+def get_news(ticker):
+    """Get news from Finviz"""
     headlines = []
-    
     try:
         url = f"https://finviz.com/quote.ashx?t={ticker}"
         headers = {'User-Agent': 'Mozilla/5.0'}
@@ -203,12 +188,12 @@ def get_news_alternative(ticker):
                     continue
     except:
         pass
-    
     return headlines
 
-def get_fundamentals_alternative(ticker):
+@st.cache_data(ttl=86400)
+def get_fundamentals(ticker):
     """Get fundamental data from Finviz"""
-    health = {"ROE": 0, "Debt": 0, "PB": 0, "Margin": "N/A", "CurrentRatio": "N/A"}
+    health = {"ROE": 0, "Debt": 0, "PB": 0, "Margin": "N/A", "CurrentRatio": "N/A", "PE": "N/A"}
     
     try:
         url = f"https://finviz.com/quote.ashx?t={ticker}"
@@ -217,18 +202,18 @@ def get_fundamentals_alternative(ticker):
         soup = BeautifulSoup(response.text, 'html.parser')
         
         def get_value(label):
-            cell = soup.find('td', string=label)
-            if cell:
-                next_cell = cell.find_next_sibling('td')
-                if next_cell:
-                    return next_cell.text.strip('%').replace(',', '')
+            cells = soup.find_all('td', class_='snapshot-td2-cp')
+            for i, cell in enumerate(cells):
+                if cell.text == label and i + 1 < len(cells):
+                    return cells[i + 1].text
             return "-"
         
         health = {
-            "ROE": float(get_value("ROE"))/100 if get_value("ROE") != "-" else 0,
+            "ROE": float(get_value("ROE").replace('%', '')) / 100 if get_value("ROE") != "-" else 0,
             "Debt": float(get_value("Debt/Eq")) if get_value("Debt/Eq") != "-" else 0,
             "PB": float(get_value("P/B")) if get_value("P/B") != "-" else 0,
-            "Margin": get_value("Profit Margin") + "%",
+            "PE": get_value("P/E"),
+            "Margin": get_value("Profit Margin"),
             "CurrentRatio": get_value("Current Ratio")
         }
     except:
@@ -236,11 +221,8 @@ def get_fundamentals_alternative(ticker):
     
     return health
 
-# -------------------------------
-# 3. TECHNICAL ANALYSIS FUNCTIONS
-# -------------------------------
-def calculate_technicals_from_df(df):
-    """Calculate RSI and Fibonacci levels from DataFrame"""
+def calculate_technicals(df):
+    """Calculate RSI and Fibonacci levels"""
     if df is None or len(df) < 30:
         return 50, {'0.382': 0, '0.500': 0, '0.618': 0}
     
@@ -262,44 +244,24 @@ def calculate_technicals_from_df(df):
     
     return rsi.iloc[-1] if not rsi.empty else 50, fib_levels
 
-def calculate_moving_averages(df):
-    """Calculate moving averages"""
-    if df is None or len(df) < 200:
-        return None, None
-    
-    df['50_MA'] = df['y'].rolling(window=50).mean()
-    df['200_MA'] = df['y'].rolling(window=200).mean()
-    return df
-
-def simple_forecast(df, days=30):
-    """Simple trend-based forecast"""
-    if df is None or len(df) < 30:
-        return None
-    
-    # Use last 30 days for trend
-    recent = df['y'].tail(30)
-    if len(recent) > 1:
-        trend = (recent.iloc[-1] / recent.iloc[0] - 1)
-        # Project forward with diminishing trend
-        return recent.iloc[-1] * (1 + trend * 0.3)
-    return recent.iloc[-1] * 1.05
-
 # -------------------------------
 # 4. DOCUMENT EXTRACTION CLASS
 # -------------------------------
 class DocumentPortfolioExtractor:
     def __init__(self):
-        self.ticker_extractor = reticker.TickerExtractor(
-            deduplicate=True,
-            match_config=reticker.TickerMatchConfig(
-                prefixed_uppercase=True,
-                unprefixed_uppercase=True,
-                prefixed_lowercase=True,
-                prefixed_titlecase=True,
-                separators="-."
+        try:
+            self.ticker_extractor = reticker.TickerExtractor(
+                deduplicate=True,
+                match_config=reticker.TickerMatchConfig(
+                    prefixed_uppercase=True,
+                    unprefixed_uppercase=True,
+                    prefixed_lowercase=True,
+                    prefixed_titlecase=True,
+                    separators="-."
+                )
             )
-        )
-        reticker.config.BLACKLIST.update(["ETF", "USD", "EUR", "GBP", "JPY", "CAD"])
+        except:
+            self.ticker_extractor = None
 
     def extract_text_from_pdf(self, file_path: str) -> str:
         try:
@@ -320,6 +282,15 @@ class DocumentPortfolioExtractor:
         except:
             return ""
 
+    def find_tickers_regex(self, text: str):
+        """Find tickers using regex as fallback"""
+        # Common stock ticker pattern (1-5 uppercase letters)
+        pattern = r'\b[A-Z]{1,5}\b'
+        matches = re.findall(pattern, text)
+        # Filter out common false positives
+        blacklist = {'ETF', 'USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'THE', 'AND', 'FOR'}
+        return [m for m in matches if m not in blacklist][:20]
+
     def process_document(self, file_path: str):
         ext = Path(file_path).suffix.lower()
         
@@ -334,149 +305,82 @@ class DocumentPortfolioExtractor:
             return [], "No text could be extracted"
         
         # Find tickers
-        raw_tickers = self.ticker_extractor.extract(text)
+        if self.ticker_extractor:
+            raw_tickers = self.ticker_extractor.extract(text)
+        else:
+            raw_tickers = self.find_tickers_regex(text)
         
         # Get info for each ticker
         holdings = []
-        for ticker in raw_tickers[:15]:  # Limit to first 15
-            price = get_stock_price_alternative(ticker)
-            if price:
-                # Look for share count
-                patterns = [
-                    rf'{ticker}\s+(\d+(?:\.\d+)?)',
-                    rf'(\d+(?:\.\d+)?)\s+{ticker}',
-                ]
-                
-                shares = 1
-                for pattern in patterns:
-                    match = re.search(pattern, text, re.IGNORECASE)
-                    if match and match.groups():
-                        shares = float(match.group(1))
-                        break
-                
+        for ticker in raw_tickers[:15]:
+            price = get_stock_price(ticker)
+            if price and price > 0:
                 holdings.append({
                     'ticker': ticker,
                     'name': get_company_name(ticker),
-                    'shares': shares,
-                    'sector': get_sector_alternative(ticker),
+                    'shares': 1,  # Default to 1 share
+                    'sector': get_sector(ticker),
                     'current_price': price
                 })
         
         return holdings, text[:500]
 
 # -------------------------------
-# 5. PORTFOLIO ANALYSIS
+# 5. SIDEBAR CONFIGURATION
 # -------------------------------
-def analyze_portfolio_holdings(holdings_df, display_currency):
-    """Analyze a DataFrame of holdings"""
+with st.sidebar:
+    st.header("⚙️ Configuration")
     
-    results = []
-    total_value = 0
-    fx = 1.0 if display_currency == "USD" else 1.1  # Approximate EUR/USD
+    # Single Ticker Input
+    ticker_input = st.text_input("Single Ticker", value=st.session_state['single_ticker'], key="ticker_input")
+    st.session_state['single_ticker'] = ticker_input
     
-    for _, row in holdings_df.iterrows():
-        ticker = row['ticker']
-        shares = float(row['shares']) if 'shares' in row else 1
-        
-        price = get_stock_price_alternative(ticker)
-        if price:
-            price_usd = price
-            curr_value = shares * price_usd * fx
-            total_value += curr_value
-            
-            # Simple forecast
-            target = price_usd * 1.05 * fx
-            growth = ((target - price_usd*fx) / (price_usd*fx)) * 100
-            
-            results.append({
-                'Ticker': ticker,
-                'Name': get_company_name(ticker),
-                'Sector': get_sector_alternative(ticker),
-                'Shares': shares,
-                'Current Price': price_usd * fx,
-                'Current Value': curr_value,
-                '30d Target': target,
-                '30d Growth %': growth
-            })
+    display_currency = st.selectbox("Currency", ["USD", "EUR"])
+    total_capital = st.number_input("Capital", value=10000)
     
-    if not results:
-        return None, None, [], 0
+    st.markdown("---")
+    st.header("📁 Portfolio Upload")
+    uploaded_file = st.file_uploader("CSV or Excel", type=['csv', 'xlsx', 'xls'])
     
-    df_portfolio = pd.DataFrame(results)
+    st.markdown("---")
+    st.header("📄 Document Upload")
+    uploaded_doc = st.file_uploader("PDF or Word", type=['pdf', 'docx', 'doc'])
     
-    # Calculate allocations
-    if total_value > 0:
-        df_portfolio['Allocation %'] = (df_portfolio['Current Value'] / total_value * 100)
-    
-    # Sector allocation
-    sector_data = df_portfolio.groupby('Sector')['Current Value'].sum().reset_index()
-    if not sector_data.empty:
-        sector_data['Allocation %'] = (sector_data['Current Value'] / sector_data['Current Value'].sum() * 100)
-        sector_data = sector_data.sort_values('Allocation %', ascending=False)
-    
-    # Suggestions
-    suggestions = []
-    
-    # Check concentration
-    high_conc = sector_data[sector_data['Allocation %'] > 30]
-    for _, row in high_conc.iterrows():
-        suggestions.append(f"⚠️ High concentration in {row['Sector']} ({row['Allocation %']:.1f}%)")
-    
-    # Check negative growth
-    neg_growth = df_portfolio[df_portfolio['30d Growth %'] < -5]
-    for _, row in neg_growth.iterrows():
-        suggestions.append(f"🔻 {row['Ticker']} has negative outlook ({row['30d Growth %']:.1f}%)")
-    
-    return df_portfolio, sector_data, suggestions, total_value
+    # Action buttons
+    col1, col2 = st.columns(2)
+    with col1:
+        analyze_single = st.button("🚀 Analyze Stock", use_container_width=True)
+    with col2:
+        extract_doc = st.button("📄 Extract Holdings", use_container_width=True)
 
 # -------------------------------
-# 6. SIDEBAR
+# 6. SINGLE TICKER ANALYSIS
 # -------------------------------
-st.sidebar.header("⚙️ Configuration")
-user_query = st.sidebar.text_input("Single Ticker", value="AAPL")
-display_currency = st.sidebar.selectbox("Currency", ["USD", "EUR"])
-total_capital = st.sidebar.number_input("Capital", value=10000)
-
-st.sidebar.markdown("---")
-st.sidebar.header("📁 Portfolio Upload")
-uploaded_file = st.sidebar.file_uploader("CSV or Excel", type=['csv', 'xlsx', 'xls'])
-
-st.sidebar.markdown("---")
-st.sidebar.header("📄 Document Upload")
-uploaded_doc = st.sidebar.file_uploader("PDF or Word", type=['pdf', 'docx', 'doc'])
-
-# Initialize session state
-if 'doc_holdings' not in st.session_state:
-    st.session_state['doc_holdings'] = None
-
-# -------------------------------
-# 7. SINGLE TICKER ANALYSIS
-# -------------------------------
-if st.sidebar.button("🚀 Analyze Single Stock"):
-    with st.spinner(f"Analyzing {user_query}..."):
-        
-        # Get current price
-        price = get_stock_price_alternative(user_query)
+if analyze_single:
+    st.session_state['analysis_done'] = True
+    ticker = st.session_state['single_ticker']
+    
+    with st.spinner(f"Analyzing {ticker}..."):
+        # Get data
+        price = get_stock_price(ticker)
         
         if price:
-            name = get_company_name(user_query)
+            name = get_company_name(ticker)
             fx = 1.1 if display_currency == "EUR" else 1.0
             sym = "$" if display_currency == "USD" else "€"
             price_display = price * fx
             
-            # Get historical data for charts
-            df = get_historical_data_alternative(user_query)
+            # Get additional data
+            df = get_historical_data(ticker)
+            health = get_fundamentals(ticker)
+            news = get_news(ticker)
             
-            # Get fundamentals
-            health = get_fundamentals_alternative(user_query)
+            # Display results
+            st.markdown("---")
+            st.header(f"📊 {name} Analysis")
             
-            # Get news
-            news = get_news_alternative(user_query)
-            
-            # Display
-            st.subheader(f"📊 {name} Analysis")
-            
-            col1, col2, col3 = st.columns(3)
+            # Key metrics
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("Current Price", f"{sym}{price_display:,.2f}")
             with col2:
@@ -484,26 +388,28 @@ if st.sidebar.button("🚀 Analyze Single Stock"):
                 st.metric("30d Target", f"{sym}{target:,.2f}")
             with col3:
                 st.metric("P/E", health.get('PE', 'N/A'))
+            with col4:
+                st.metric("ROE", f"{health['ROE']*100:.1f}%")
             
-            # Price chart if historical data available
+            # Price chart
             if df is not None and len(df) > 30:
                 st.subheader("📈 6-Month Price History")
                 fig, ax = plt.subplots(figsize=(12, 6))
                 
-                # Get last 180 days
                 df_display = df.tail(180).copy()
                 df_display['y_display'] = df_display['y'] * fx
                 
-                ax.plot(df_display['ds'], df_display['y_display'], 'b-', linewidth=2)
+                ax.plot(df_display['ds'], df_display['y_display'], 'b-', linewidth=2, label='Price')
                 ax.set_xlabel('Date')
                 ax.set_ylabel(f'Price ({sym})')
                 ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
                 plt.xticks(rotation=45)
                 plt.grid(True, alpha=0.3)
+                plt.legend()
                 st.pyplot(fig)
                 
-                # Technicals
-                rsi, fibs = calculate_technicals_from_df(df)
+                # Technical indicators
+                rsi, fibs = calculate_technicals(df)
                 
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -512,7 +418,8 @@ if st.sidebar.button("🚀 Analyze Single Stock"):
                     signal = "Overbought" if rsi > 70 else "Oversold" if rsi < 30 else "Neutral"
                     st.metric("Signal", signal)
                 with col3:
-                    st.metric("Trend", "Up" if rsi > 50 else "Down")
+                    trend = "Bullish" if rsi > 50 else "Bearish"
+                    st.metric("Trend", trend)
                 
                 # Fibonacci levels
                 st.subheader("📊 Fibonacci Support Levels")
@@ -524,7 +431,7 @@ if st.sidebar.button("🚀 Analyze Single Stock"):
                 with fcol3:
                     st.metric("0.618", f"{sym}{fibs['0.618']*fx:,.2f}")
             
-            # News
+            # News section
             if news:
                 st.subheader("📰 Recent News")
                 for item in news[:5]:
@@ -535,29 +442,26 @@ if st.sidebar.button("🚀 Analyze Single Stock"):
             st.subheader("🏥 Fundamentals")
             col1, col2 = st.columns(2)
             with col1:
-                st.metric("ROE", f"{health['ROE']*100:.1f}%")
+                st.metric("Debt/Equity", f"{health['Debt']:.2f}")
                 st.metric("P/B Ratio", f"{health['PB']:.2f}")
             with col2:
-                st.metric("Debt/Equity", f"{health['Debt']:.2f}")
                 st.metric("Profit Margin", health['Margin'])
-            
+                st.metric("Current Ratio", health['CurrentRatio'])
         else:
-            st.error(f"Could not fetch data for {user_query}")
+            st.error(f"Could not fetch data for {ticker}")
 
 # -------------------------------
-# 8. PORTFOLIO UPLOAD ANALYSIS
+# 7. PORTFOLIO ANALYSIS
 # -------------------------------
 if uploaded_file is not None:
-    st.markdown("---")
-    st.header("📁 Portfolio Analysis")
-    
-    # Read file
     try:
+        # Read file
         if uploaded_file.name.endswith('.csv'):
             df_in = pd.read_csv(uploaded_file)
         else:
             df_in = pd.read_excel(uploaded_file)
         
+        # Normalize columns
         df_in.columns = df_in.columns.str.strip().str.lower()
         
         if 'ticker' not in df_in.columns:
@@ -566,95 +470,152 @@ if uploaded_file is not None:
             if 'shares' not in df_in.columns:
                 df_in['shares'] = 1
             
-            with st.spinner("Analyzing portfolio..."):
-                df_port, sector_data, suggestions, total_val = analyze_portfolio_holdings(
-                    df_in, display_currency
-                )
+            st.markdown("---")
+            st.header("📁 Portfolio Analysis")
             
-            if df_port is not None:
+            with st.spinner("Analyzing portfolio..."):
+                results = []
+                total_value = 0
+                fx = 1.1 if display_currency == "EUR" else 1.0
                 sym = "$" if display_currency == "USD" else "€"
                 
-                # Summary
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Total Value", f"{sym}{total_val:,.2f}")
-                with col2:
-                    st.metric("Holdings", len(df_port))
-                with col3:
-                    avg_growth = df_port['30d Growth %'].mean()
-                    st.metric("Avg 30d Growth", f"{avg_growth:.1f}%")
+                progress_bar = st.progress(0)
+                for idx, row in df_in.iterrows():
+                    ticker = str(row['ticker']).strip().upper()
+                    shares = float(row['shares'])
+                    
+                    progress_bar.progress((idx + 1) / len(df_in))
+                    
+                    price = get_stock_price(ticker)
+                    if price:
+                        price_display = price * fx
+                        value = shares * price_display
+                        total_value += value
+                        
+                        results.append({
+                            'Ticker': ticker,
+                            'Name': get_company_name(ticker),
+                            'Sector': get_sector(ticker),
+                            'Shares': shares,
+                            'Current Price': price_display,
+                            'Current Value': value,
+                            '30d Target': price_display * 1.05,
+                            '30d Growth %': 5.0
+                        })
                 
-                # Holdings table
-                st.subheader("Holdings")
-                display_df = df_port.copy()
-                for col in ['Current Price', 'Current Value', '30d Target']:
-                    display_df[col] = display_df[col].apply(lambda x: f"{sym}{x:,.2f}")
-                display_df['30d Growth %'] = display_df['30d Growth %'].apply(lambda x: f"{x:.1f}%")
-                display_df['Allocation %'] = display_df['Allocation %'].apply(lambda x: f"{x:.1f}%")
-                st.dataframe(display_df)
+                progress_bar.empty()
                 
-                # Sector chart
-                if sector_data is not None and not sector_data.empty:
+                if results:
+                    df_port = pd.DataFrame(results)
+                    
+                    # Calculate allocations
+                    if total_value > 0:
+                        df_port['Allocation %'] = (df_port['Current Value'] / total_value * 100)
+                    
+                    # Display summary
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total Value", f"{sym}{total_value:,.2f}")
+                    with col2:
+                        st.metric("Holdings", len(df_port))
+                    with col3:
+                        st.metric("Avg Price", f"{sym}{df_port['Current Price'].mean():,.2f}")
+                    
+                    # Holdings table
+                    st.subheader("Holdings")
+                    display_df = df_port.copy()
+                    for col in ['Current Price', 'Current Value', '30d Target']:
+                        display_df[col] = display_df[col].apply(lambda x: f"{sym}{x:,.2f}")
+                    display_df['30d Growth %'] = display_df['30d Growth %'].apply(lambda x: f"{x:.1f}%")
+                    display_df['Allocation %'] = display_df['Allocation %'].apply(lambda x: f"{x:.1f}%")
+                    st.dataframe(display_df)
+                    
+                    # Sector allocation
                     st.subheader("Sector Allocation")
-                    fig, ax = plt.subplots()
-                    ax.pie(sector_data['Current Value'], 
-                           labels=sector_data['Sector'], 
-                           autopct='%1.1f%%',
-                           startangle=90)
-                    ax.axis('equal')
-                    st.pyplot(fig)
-                
-                # Suggestions
-                if suggestions:
+                    sector_data = df_port.groupby('Sector')['Current Value'].sum().reset_index()
+                    if not sector_data.empty:
+                        fig, ax = plt.subplots()
+                        ax.pie(sector_data['Current Value'], 
+                               labels=sector_data['Sector'], 
+                               autopct='%1.1f%%',
+                               startangle=90)
+                        ax.axis('equal')
+                        st.pyplot(fig)
+                    
+                    # Suggestions
                     st.subheader("💡 Suggestions")
-                    for s in suggestions:
-                        st.info(s)
-            else:
-                st.error("Could not analyze portfolio")
+                    high_conc = sector_data[sector_data['Current Value'] / total_value > 0.3]
+                    if not high_conc.empty:
+                        for _, row in high_conc.iterrows():
+                            st.info(f"⚠️ High concentration in {row['Sector']}")
+                    
+                    if len(results) < 3:
+                        st.info("📊 Consider adding more holdings for diversification")
+                else:
+                    st.error("No valid tickers found")
     except Exception as e:
-        st.error(f"Error reading file: {e}")
+        st.error(f"Error processing file: {str(e)}")
 
 # -------------------------------
-# 9. DOCUMENT PROCESSING
+# 8. DOCUMENT PROCESSING
 # -------------------------------
-if uploaded_doc is not None:
-    if st.sidebar.button("📄 Extract Holdings"):
-        with st.spinner("Extracting from document..."):
-            # Save temp file
-            temp_path = f"temp_{uploaded_doc.name}"
-            with open(temp_path, "wb") as f:
-                f.write(uploaded_doc.getbuffer())
+if extract_doc and uploaded_doc is not None:
+    with st.spinner("Extracting holdings from document..."):
+        # Save temp file
+        temp_path = f"temp_{uploaded_doc.name}"
+        with open(temp_path, "wb") as f:
+            f.write(uploaded_doc.getbuffer())
+        
+        # Extract
+        extractor = DocumentPortfolioExtractor()
+        holdings, preview = extractor.process_document(temp_path)
+        os.remove(temp_path)
+        
+        if holdings:
+            st.session_state['doc_holdings'] = holdings
+            st.success(f"✅ Found {len(holdings)} holdings!")
             
-            # Extract
-            extractor = DocumentPortfolioExtractor()
-            holdings, preview = extractor.process_document(temp_path)
-            os.remove(temp_path)
+            # Show extracted holdings
+            st.markdown("---")
+            st.subheader("📄 Extracted Holdings")
+            holdings_df = pd.DataFrame(holdings)
+            st.dataframe(holdings_df)
             
-            if holdings:
-                st.session_state['doc_holdings'] = holdings
-                st.success(f"✅ Found {len(holdings)} holdings!")
-                
-                # Show extracted holdings
-                st.subheader("📄 Extracted Holdings")
-                holdings_df = pd.DataFrame(holdings)
-                st.dataframe(holdings_df)
-                
-                # Analyze button
-                if st.button("📊 Analyze These Holdings"):
-                    holdings_df = pd.DataFrame(holdings)
+            # Analyze button
+            if st.button("📊 Analyze These Holdings"):
+                with st.spinner("Analyzing holdings..."):
+                    fx = 1.1 if display_currency == "EUR" else 1.0
+                    sym = "$" if display_currency == "USD" else "€"
                     
-                    with st.spinner("Analyzing holdings..."):
-                        df_port, sector_data, suggestions, total_val = analyze_portfolio_holdings(
-                            holdings_df, display_currency
-                        )
+                    results = []
+                    total_value = 0
                     
-                    if df_port is not None:
-                        sym = "$" if display_currency == "USD" else "€"
+                    for h in holdings:
+                        price = h['current_price']
+                        price_display = price * fx
+                        value = h['shares'] * price_display
+                        total_value += value
+                        
+                        results.append({
+                            'Ticker': h['ticker'],
+                            'Name': h['name'],
+                            'Sector': h['sector'],
+                            'Shares': h['shares'],
+                            'Current Price': price_display,
+                            'Current Value': value,
+                            '30d Target': price_display * 1.05,
+                            '30d Growth %': 5.0
+                        })
+                    
+                    if results:
+                        df_port = pd.DataFrame(results)
+                        
+                        if total_value > 0:
+                            df_port['Allocation %'] = (df_port['Current Value'] / total_value * 100)
                         
                         st.subheader("Analysis Results")
-                        st.metric("Total Value", f"{sym}{total_val:,.2f}")
+                        st.metric("Total Value", f"{sym}{total_value:,.2f}")
                         
-                        # Display table
                         display_df = df_port.copy()
                         for col in ['Current Price', 'Current Value', '30d Target']:
                             display_df[col] = display_df[col].apply(lambda x: f"{sym}{x:,.2f}")
@@ -662,18 +623,19 @@ if uploaded_doc is not None:
                         st.dataframe(display_df)
                         
                         # Sector chart
-                        if sector_data is not None and not sector_data.empty:
+                        sector_data = df_port.groupby('Sector')['Current Value'].sum().reset_index()
+                        if not sector_data.empty:
                             fig, ax = plt.subplots()
                             ax.pie(sector_data['Current Value'], 
                                    labels=sector_data['Sector'], 
                                    autopct='%1.1f%%')
                             ax.axis('equal')
                             st.pyplot(fig)
-                        
-                        # Suggestions
-                        if suggestions:
-                            st.subheader("💡 Suggestions")
-                            for s in suggestions:
-                                st.info(s)
-            else:
-                st.warning("No holdings found in document")
+        else:
+            st.warning("No holdings found in document")
+
+# -------------------------------
+# 9. FOOTER
+# -------------------------------
+st.markdown("---")
+st.markdown("*Data sourced from Finviz and Stooq. Updates every hour.*")
