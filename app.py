@@ -16,20 +16,29 @@ import io
 import os
 from pathlib import Path
 import re
+import warnings
+warnings.filterwarnings('ignore')
 
-# Document/image extraction
+# Document/image extraction with fallback
 try:
     from pypdf import PdfReader
     import docx
     import reticker
+    PDF_DOCX_AVAILABLE = True
+except ImportError:
+    PDF_DOCX_AVAILABLE = False
+    st.warning("For PDF/Word upload, install: pypdf, python-docx, reticker")
+
+# OCR - we'll attempt to import, but handle gracefully
+try:
     import easyocr
-    import torch  # required by easyocr
+    import torch
     OCR_AVAILABLE = True
-    # Initialize reader once (lazy loading)
-    reader = None
+    # Lazy load reader to avoid startup delay
+    ocr_reader = None
 except ImportError:
     OCR_AVAILABLE = False
-    st.warning("For image OCR, install: easyocr, torch. PDF/Word extraction requires pypdf, python-docx, reticker.")
+    st.warning("For image OCR, install: easyocr, torch. Image upload will use basic text extraction only.")
 
 # 1. UI SETUP & THEME-AWARE CSS
 st.set_page_config(page_title="Strategic AI Investment Architect", layout="wide")
@@ -61,7 +70,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders. AI projections are mathematical and adjusted for market volatility.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (V11.0 - OCR & Diversification)")
+st.title("🏛️ Strategic AI Investment Architect (V11.1 - Cloud Optimized)")
 
 # 3. RATE LIMITER
 class RateLimiter:
@@ -254,7 +263,7 @@ def volume_trend_message(df_vol):
     else:
         return "➡️ Neutral volume trend."
 
-# 5. DOCUMENT/IMAGE EXTRACTION CLASS (Enhanced with OCR)
+# 5. DOCUMENT/IMAGE EXTRACTION CLASS (with OCR fallback)
 class PortfolioExtractor:
     def __init__(self):
         self.ticker_extractor = None
@@ -270,13 +279,16 @@ class PortfolioExtractor:
                 )
             )
         self.ocr_reader = None
-        if OCR_AVAILABLE:
-            # Lazy load OCR reader to avoid startup delay
-            pass
+        self.ocr_available = OCR_AVAILABLE
 
     def _get_ocr_reader(self):
-        if self.ocr_reader is None and OCR_AVAILABLE:
-            self.ocr_reader = easyocr.Reader(['en'])  # only English
+        if self.ocr_reader is None and self.ocr_available:
+            try:
+                # Attempt to load the model; if it fails, disable OCR
+                self.ocr_reader = easyocr.Reader(['en'], gpu=False)
+            except Exception as e:
+                st.warning(f"OCR model download failed: {e}. Image upload will use basic text extraction only.")
+                self.ocr_available = False
         return self.ocr_reader
 
     def extract_text_from_pdf(self, file_path):
@@ -295,8 +307,8 @@ class PortfolioExtractor:
             return ""
 
     def extract_text_from_image(self, file_path):
-        """OCR using easyocr"""
-        if not OCR_AVAILABLE:
+        """OCR using easyocr with graceful failure"""
+        if not self.ocr_available:
             return ""
         reader = self._get_ocr_reader()
         if reader is None:
@@ -305,7 +317,7 @@ class PortfolioExtractor:
             result = reader.readtext(file_path, detail=0, paragraph=True)
             return "\n".join(result)
         except Exception as e:
-            st.warning(f"OCR error: {e}")
+            st.warning(f"OCR processing error: {e}")
             return ""
 
     def find_tickers_regex(self, text):
@@ -317,17 +329,17 @@ class PortfolioExtractor:
     def extract_quantities(self, text, ticker):
         """Find share count near ticker mentions."""
         patterns = [
-            rf'{ticker}\s+(\d+(?:\.\d+)?)',            # AAPL 100
-            rf'(\d+(?:\.\d+)?)\s+{ticker}',            # 100 AAPL
-            rf'\${ticker}\s+(\d+(?:\.\d+)?)',          # $AAPL 100
-            rf'(\d+(?:\.\d+)?)\s+shares?\s+of\s+{ticker}',  # 100 shares of AAPL
-            rf'{ticker}\s+shares?\s+(\d+(?:\.\d+)?)',  # AAPL shares 100
+            rf'{ticker}\s+(\d+(?:\.\d+)?)',
+            rf'(\d+(?:\.\d+)?)\s+{ticker}',
+            rf'\${ticker}\s+(\d+(?:\.\d+)?)',
+            rf'(\d+(?:\.\d+)?)\s+shares?\s+of\s+{ticker}',
+            rf'{ticker}\s+shares?\s+(\d+(?:\.\d+)?)',
         ]
         for pattern in patterns:
             match = re.search(pattern, text, re.IGNORECASE)
             if match and match.groups():
                 return float(match.group(1))
-        return 1.0  # default
+        return 1.0
 
     def process_file(self, file_path):
         ext = Path(file_path).suffix.lower()
@@ -351,7 +363,7 @@ class PortfolioExtractor:
             raw_tickers = self.ticker_extractor.extract(text)
         else:
             raw_tickers = self.find_tickers_regex(text)
-        raw_tickers = list(set(raw_tickers))  # dedup
+        raw_tickers = list(set(raw_tickers))
 
         # Validate with yFinance and extract quantities
         holdings = []
@@ -395,13 +407,12 @@ def analyze_ticker_basic(ticker, display_currency):
     except:
         return None
 
-def suggest_diversification(current_sectors, total_value, top_holdings=5):
+def suggest_diversification(current_sectors, total_value):
     """
     Suggest sectors to add and provide example stocks/ETFs.
     current_sectors: dict {sector: allocation_percentage}
     """
     suggestions = []
-    # Common sectors with example ETFs/tickers
     sector_examples = {
         'Technology': ['AAPL', 'MSFT', 'QQQ'],
         'Healthcare': ['JNJ', 'UNH', 'XLV'],
@@ -415,14 +426,13 @@ def suggest_diversification(current_sectors, total_value, top_holdings=5):
         'Consumer Defensive': ['PG', 'KO', 'XLP'],
         'Basic Materials': ['LIN', 'BHP', 'XLB']
     }
-    # Identify sectors with allocation < 10% (or missing)
     allocated_sectors = set(current_sectors.keys())
     for sector, examples in sector_examples.items():
         if sector not in allocated_sectors:
             suggestions.append(f"💡 No exposure to **{sector}**. Consider adding {', '.join(examples[:3])}")
         elif current_sectors[sector] < 10:
             suggestions.append(f"💡 Low allocation ({current_sectors[sector]:.1f}%) to **{sector}**. Consider increasing via {', '.join(examples[:2])}")
-    return suggestions[:5]  # limit to 5 suggestions
+    return suggestions[:5]
 
 def process_uploaded_file(uploaded_file):
     """Handle CSV, Excel, PDF, Word, Images"""
@@ -442,7 +452,6 @@ def process_uploaded_file(uploaded_file):
                 return None
             if 'shares' not in df.columns:
                 df['shares'] = 1
-            # Optional purchase price
             if 'purchase price' in df.columns:
                 df['purchase price'] = pd.to_numeric(df['purchase price'], errors='coerce')
             return {'type': 'tabular', 'data': df, 'preview': None}
@@ -452,8 +461,11 @@ def process_uploaded_file(uploaded_file):
 
     # PDF/Word/Image
     elif ext in ['.pdf', '.docx', '.doc', '.png', '.jpg', '.jpeg', '.tiff', '.bmp']:
+        # Check if we have the necessary libraries
+        if ext in ['.pdf', '.docx', '.doc'] and not PDF_DOCX_AVAILABLE:
+            st.error("PDF/Word support not installed. Please install pypdf, python-docx, reticker.")
+            return None
         extractor = PortfolioExtractor()
-        # Save temp file
         temp_path = f"temp_{uploaded_file.name}"
         with open(temp_path, 'wb') as f:
             f.write(uploaded_file.getbuffer())
@@ -653,7 +665,6 @@ if uploaded_file is not None:
                 value = shares * analysis['price']
                 total_value += value
                 if pd.notna(purchase_price):
-                    # Assume purchase_price is in same currency as current? We'll treat as given.
                     cost = shares * purchase_price
                     total_cost += cost
                     gain = value - cost
