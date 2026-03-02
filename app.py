@@ -11,7 +11,6 @@ import matplotlib.dates as mdates
 import datetime
 import yfinance as yf
 import io
-import asyncio
 import re
 import tempfile
 import os
@@ -54,10 +53,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders. AI projections are mathematical and adjusted for market volatility.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (V10.1)")
+st.title("🏛️ Strategic AI Investment Architect (V10.2)")
 
 # -------------------------------
-# 2. HELPER FUNCTIONS (unchanged)
+# 2. HELPER FUNCTIONS
 # -------------------------------
 def get_exchange_rate(from_curr, to_curr):
     if from_curr == to_curr: return 1.0
@@ -256,10 +255,10 @@ def volume_trend_message(df_vol):
         return "➡️ Neutral volume trend; no strong confirmation or divergence."
 
 # -------------------------------
-# 3. DOCUMENT EXTRACTION CLASS (No System Dependencies)
+# 3. DOCUMENT EXTRACTION CLASS
 # -------------------------------
 class DocumentPortfolioExtractor:
-    """Extract portfolio holdings from digital PDFs and Word docs (no OCR, no system deps)."""
+    """Extract portfolio holdings from digital PDFs and Word docs."""
 
     def __init__(self):
         self.ticker_extractor = reticker.TickerExtractor(
@@ -315,8 +314,8 @@ class DocumentPortfolioExtractor:
 
     def find_holdings_near_tickers(self, text: str, tickers: list):
         holdings = []
-        lines = text.split('\n')
         for ticker in tickers:
+            # Look for patterns like "AAPL 100" or "100 AAPL" or "$AAPL 100"
             patterns = [
                 rf'{ticker}\s+(\d+(?:\.\d+)?)',
                 rf'(\d+(?:\.\d+)?)\s+{ticker}',
@@ -332,7 +331,7 @@ class DocumentPortfolioExtractor:
                         'shares': shares,
                         'source_text': match.group(0)
                     })
-                    break
+                    break  # Take first match per ticker
         return holdings
 
     def validate_tickers(self, tickers: list):
@@ -376,13 +375,13 @@ class DocumentPortfolioExtractor:
         return enriched, preview
 
 # -------------------------------
-# 4. PORTFOLIO ANALYSIS FUNCTIONS (unchanged)
+# 4. PORTFOLIO ANALYSIS FUNCTIONS
 # -------------------------------
 @st.cache_data(ttl=3600)
 def analyze_single_ticker_for_portfolio(ticker, display_currency):
     try:
-        ticker, name, suffix, native_curr = resolve_smart_ticker(ticker)
-        df, health = get_fundamental_health(ticker, suffix)
+        ticker_resolved, name, suffix, native_curr = resolve_smart_ticker(ticker)
+        df, health = get_fundamental_health(ticker_resolved, suffix)
         if df is None:
             return None
         fx = get_exchange_rate(native_curr, display_currency)
@@ -406,7 +405,7 @@ def analyze_single_ticker_for_portfolio(ticker, display_currency):
         target_p_30 = forecast['yhat'].iloc[len(df) + 29] * fx
         growth_30 = ((target_p_30 - cur_p) / cur_p) * 100
 
-        sector = get_sector(ticker)
+        sector = get_sector(ticker_resolved)
 
         return {
             'name': name,
@@ -424,7 +423,10 @@ def analyze_single_ticker_for_portfolio(ticker, display_currency):
 def process_portfolio(uploaded_file, display_currency):
     df_in = None
     try:
-        if uploaded_file.name.endswith('.csv'):
+        if isinstance(uploaded_file, str):
+            # Handle string input (CSV content)
+            df_in = pd.read_csv(io.StringIO(uploaded_file))
+        elif uploaded_file.name.endswith('.csv'):
             df_in = pd.read_csv(uploaded_file)
         elif uploaded_file.name.endswith(('.xlsx', '.xls')):
             try:
@@ -584,14 +586,190 @@ uploaded_doc = st.sidebar.file_uploader(
     type=['pdf', 'docx', 'doc']
 )
 
+# Initialize session state for document holdings
+if 'doc_holdings' not in st.session_state:
+    st.session_state['doc_holdings'] = None
+
 # -------------------------------
-# 6. MAIN EXECUTION: SINGLE TICKER (unchanged)
+# 6. MAIN EXECUTION: SINGLE TICKER
 # -------------------------------
 if st.sidebar.button("🚀 Run Deep Audit on Single Ticker"):
-    # ... (same as before, omitted for brevity - keep your existing code)
-    # We'll keep the full single ticker analysis code from previous version.
-    # For space, I'll not repeat it here, but you must include it in the final file.
-    pass
+    with st.spinner("Analyzing..."):
+        ticker, name, suffix, native_curr = resolve_smart_ticker(user_query)
+        df, health = get_fundamental_health(ticker, suffix)
+
+        if df is not None:
+            fx = get_exchange_rate(native_curr, display_currency)
+            sym = "$" if display_currency == "USD" else "€"
+            cur_p = df['y'].iloc[-1] * fx
+
+            df['50_Day_Moving_Average'] = df['y'].rolling(window=50).mean()
+            df['200_Day_Moving_Average'] = df['y'].rolling(window=200).mean()
+
+            # Prophet
+            m = Prophet(
+                daily_seasonality=False,
+                weekly_seasonality=True,
+                yearly_seasonality=True,
+                changepoint_prior_scale=0.08,
+                changepoint_range=0.9,
+                seasonality_mode='additive'
+            )
+            m.fit(df[['ds', 'y']])
+            future = m.make_future_dataframe(periods=180)
+            forecast = m.predict(future)
+
+            hist_min = df['y'].min()
+            hist_max = df['y'].max()
+            forecast['yhat'] = forecast['yhat'].clip(lower=hist_min * 0.01, upper=hist_max * 3)
+            forecast['yhat_lower'] = forecast['yhat_lower'].clip(lower=hist_min * 0.01, upper=hist_max * 3)
+            forecast['yhat_upper'] = forecast['yhat_upper'].clip(lower=hist_min * 0.01, upper=hist_max * 3)
+
+            trend_val = forecast[forecast['ds'] == df['ds'].iloc[-1]]['yhat'].values[0] * fx
+            deviation = ((cur_p - trend_val) / trend_val) * 100
+            fair_low = trend_val * 0.95
+            fair_high = trend_val * 1.05
+
+            is_death_cross = df['50_Day_Moving_Average'].iloc[-1] < df['200_Day_Moving_Average'].iloc[-1]
+            crossover_msg = "Price stability detected."
+            cross_point = None
+            for i in range(len(df)-60, len(df)):
+                prev = i-1
+                if df['50_Day_Moving_Average'].iloc[prev] < df['200_Day_Moving_Average'].iloc[prev] and df['50_Day_Moving_Average'].iloc[i] > df['200_Day_Moving_Average'].iloc[i]:
+                    cross_point = (df['ds'].iloc[i], df['50_Day_Moving_Average'].iloc[i], "GOLDEN")
+                    crossover_msg = "🚀 GOLDEN CROSS: 50-Day Moving Average crossed ABOVE 200-Day."
+                elif df['50_Day_Moving_Average'].iloc[prev] > df['200_Day_Moving_Average'].iloc[prev] and df['50_Day_Moving_Average'].iloc[i] < df['200_Day_Moving_Average'].iloc[i]:
+                    cross_point = (df['ds'].iloc[i], df['50_Day_Moving_Average'].iloc[i], "DEATH")
+                    crossover_msg = "⚠️ DEATH CROSS: 50-Day Moving Average crossed BELOW 200-Day."
+
+            target_p_30 = forecast['yhat'].iloc[len(df) + 29] * fx
+            if is_death_cross:
+                target_p_30 *= 0.96
+            ai_roi_30 = ((target_p_30 - cur_p) / cur_p) * 100
+
+            rsi, fibs = calculate_technicals(df)
+
+            all_news = get_enhanced_news(ticker)
+            impactful_news = filter_impactful_news(all_news)
+            headlines_display = [f"{'🟢' if n['sentiment']>0 else '🔴' if n['sentiment']<0 else '⚪'} {n['headline']}" for n in all_news[:5]]
+
+            if impactful_news:
+                avg_news_sentiment = np.mean([n['sentiment'] for n in impactful_news])
+            else:
+                avg_news_sentiment = 0
+
+            score = 15
+            if not is_death_cross:
+                score += 20
+            if health['ROE'] > 0.12:
+                score += 20
+            if ai_roi_30 > 0.5:
+                score += 30
+            if avg_news_sentiment > 0:
+                score += 15
+            score = max(0, min(100, score))
+
+            if score >= 70:
+                verdict, v_col, action, pct = "Strong Buy", "v-green", "ACTION: BUY NOW", 25
+            elif score >= 35:
+                verdict, v_col, action, pct = "Hold / Neutral", "v-orange", "ACTION: MONITOR", 10
+            else:
+                verdict, v_col, action, pct = "Sell / Avoid", "v-red", "ACTION: SELL / STAY AWAY", 0
+
+            sl_price = cur_p * (0.95 if rsi > 70 else 0.85 if rsi < 30 else 0.90)
+
+            st.subheader(f"📊 {name} Analysis ({ticker})")
+
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                if deviation > 15:
+                    st.warning(f"⚠️ MEAN REVERSION RISK: Price is {deviation:.1f}% above AI baseline trend.")
+                else:
+                    st.success(f"✅ TREND ALIGNMENT: Price is within {deviation:.1f}% of AI baseline.")
+            with col_f2:
+                st.info(f"💎 AI FAIR VALUE RANGE: {sym}{fair_low:,.2f} - {sym}{fair_high:,.2f}")
+
+            st.markdown(f'<div class="impact-announcement">{crossover_msg}</div>', unsafe_allow_html=True)
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Conviction Score", f"{score}/100")
+            m2.metric("Current Price", f"{sym}{cur_p:,.2f}")
+            m3.metric("30d AI Growth", f"{ai_roi_30:.1f}%")
+            m4.metric("30d AI Target", f"{sym}{target_p_30:,.2f}")
+
+            st.markdown(f'<div class="verdict-box {v_col}">Strategic Verdict: {verdict} | {action}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="stop-loss-box">🛑 AGGRESSIVE STOP LOSS: {sym}{sl_price:,.2f}</div>', unsafe_allow_html=True)
+
+            col_l, col_r = st.columns(2)
+            with col_l:
+                st.markdown("### 🏥 Company Health")
+                st.table(pd.DataFrame({
+                    "Metric": ["ROE", "P/B Ratio", "Debt/Equity", "Current Ratio"],
+                    "Status": [f"{health['ROE']*100:.1f}%", f"{health['PB']}x", health['Debt'], health['CurrentRatio']],
+                    "Rating": ["✅ Prime" if health['ROE'] > 0.15 else "⚠️ Weak", "✅ Healthy" if health['PB'] < 3.0 else "⚠️ Expensive", "✅ Safe", "✅ Liquid"]
+                }))
+                st.markdown("### 📰 Recent Headlines")
+                for h in headlines_display:
+                    st.markdown(f'<div class="news-card">{h}</div>', unsafe_allow_html=True)
+
+            with col_r:
+                st.markdown("### ⚖️ Strategy & Fibonacci Limits")
+                st.markdown(f"""<div class="phase-card">
+                    <h4 style="color:#1f77b4">PHASE 1: IMMEDIATE</h4>
+                    <p><b>Invest Today:</b> {sym}{total_capital*(pct/100):,.2f} ({pct}% allocation)</p>
+                    <hr>
+                    <h4 style="color:#1f77b4">PHASE 2: STAGED ENTRY (FIBONACCI)</h4>
+                    <div class="fib-box">🔹 Target 1 (0.382): {sym}{fibs['0.382']*fx:,.2f}</div>
+                    <div class="fib-box">🔹 Target 2 (0.500): {sym}{fibs['0.500']*fx:,.2f}</div>
+                    <div class="fib-box">🔹 Target 3 (0.618): {sym}{fibs['0.618']*fx:,.2f}</div>
+                </div>""", unsafe_allow_html=True)
+
+            if impactful_news:
+                st.markdown("### 🔥 News Likely to Impact Price")
+                for news in impactful_news[:7]:
+                    emoji = '🟢' if news['sentiment'] > 0.1 else '🔴' if news['sentiment'] < -0.1 else '⚪'
+                    date_str = news['date'].strftime("%b %d, %Y")
+                    st.markdown(f"""
+                    <div class="impact-news">
+                        <b>{emoji} {news['headline']}</b><br>
+                        <span style="font-size:0.85rem;">{date_str} · {news['source']} · Sentiment: {news['sentiment']:.2f}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            st.markdown("---")
+            st.subheader("🤖 AI Stock 180-Day Projection")
+            fig, ax = plt.subplots(figsize=(12, 6))
+            forecast_plot = forecast.copy()
+            forecast_plot[['yhat', 'yhat_lower', 'yhat_upper']] *= fx
+            m.plot(forecast_plot, ax=ax)
+            ax.plot(df['ds'], df['50_Day_Moving_Average'] * fx, label='50-Day Moving Average', color='orange', linewidth=2)
+            ax.plot(df['ds'], df['200_Day_Moving_Average'] * fx, label='200-Day Moving Average', color='red', linewidth=2)
+            if cross_point:
+                ax.scatter(cross_point[0], cross_point[1] * fx, color='gold', s=300, marker='*', label=f"{cross_point[2]} CROSS POINT", zorder=5)
+            ax.set_xlim([datetime.datetime.now() - datetime.timedelta(days=180), datetime.datetime.now() + datetime.timedelta(days=180)])
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+            plt.legend(loc='upper left')
+            st.pyplot(fig)
+
+            st.markdown("---")
+            st.subheader("📊 12-Month Relative Volume Trend")
+            vol_fig, vol_ax = plt.subplots(figsize=(12, 4))
+            vol_df = df.tail(252).copy()
+            colors = ['#2e7d32' if i > 0 and vol_df.iloc[i]['y'] >= vol_df.iloc[i-1]['y'] else '#c62828' for i in range(len(vol_df))]
+            vol_ax.bar(vol_df['ds'], vol_df['vol'], color=colors, alpha=0.7)
+            vol_ax.set_ylabel("Shares Traded")
+            vol_ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+            st.pyplot(vol_fig)
+
+            st.caption("🔵 **Volume color:** Green bars = price increased from previous day; Red bars = price decreased from previous day. "
+                       "High volume on green days confirms buying interest; high volume on red days signals selling pressure. "
+                       "The message below summarises the volume‑price relationship over the last 12 months.")
+
+            vol_message = volume_trend_message(vol_df)
+            st.info(f"📈 **Volume Insight:** {vol_message}")
+
+        else:
+            st.error("Data Unreachable. Check Symbol.")
 
 # -------------------------------
 # 7. PORTFOLIO ANALYSIS (CSV/Excel)
@@ -635,7 +813,7 @@ if uploaded_file is not None:
         st.error("Could not analyze portfolio. Please check your file format and tickers.")
 
 # -------------------------------
-# 8. DOCUMENT UPLOAD PROCESSING (No System Deps)
+# 8. DOCUMENT UPLOAD PROCESSING
 # -------------------------------
 if st.sidebar.button("🔍 Extract from Document") and uploaded_doc is not None:
     with st.spinner("Extracting holdings from document..."):
@@ -656,35 +834,44 @@ if st.sidebar.button("🔍 Extract from Document") and uploaded_doc is not None:
             display_cols = ['ticker', 'name', 'shares', 'sector', 'current_price']
             available = [c for c in display_cols if c in df_doc.columns]
             st.dataframe(df_doc[available])
-
-            if st.button("📊 Analyze These Holdings"):
-                # Convert to format expected by portfolio analysis
-                portfolio_df = pd.DataFrame({
-                    'Ticker': [h['ticker'] for h in holdings],
-                    'Shares': [h.get('shares', 1) for h in holdings],
-                    'Sector': [h.get('sector', 'Unknown') for h in holdings]
-                })
-                # Save to session state for later use
-                st.session_state['doc_portfolio'] = portfolio_df
-                st.success("Holdings loaded! Go to the Portfolio Analysis section and click 'Analyze Document Holdings'.")
+            
+            # Store in session state
+            st.session_state['doc_holdings'] = holdings
+            st.success(f"✅ Found {len(holdings)} holdings! Click '📊 Analyze Document Holdings' below to analyze them.")
         else:
             st.warning("No valid holdings found in document. Raw text preview:")
             st.text(preview)
 
-# If we have document holdings stored, allow analysis
-if 'doc_portfolio' in st.session_state:
+# -------------------------------
+# 9. DOCUMENT HOLDINGS ANALYSIS
+# -------------------------------
+if st.session_state['doc_holdings'] is not None:
     st.markdown("---")
-    st.header("📁 Document Portfolio Analysis")
-    if st.button("Analyze Document Holdings"):
-        # Convert session state DataFrame back to a file-like object
+    st.header("📊 Document Holdings Analysis")
+    
+    if st.button("📊 Analyze Document Holdings"):
+        # Convert holdings to DataFrame format expected by process_portfolio
+        holdings_df = pd.DataFrame(st.session_state['doc_holdings'])
+        
+        # Create portfolio format
+        portfolio_data = pd.DataFrame({
+            'Ticker': [h['ticker'] for h in st.session_state['doc_holdings']],
+            'Shares': [h.get('shares', 1) for h in st.session_state['doc_holdings']],
+            'Sector': [h.get('sector', 'Unknown') for h in st.session_state['doc_holdings']]
+        })
+        
+        # Convert to CSV string for processing
         csv_buffer = io.StringIO()
-        st.session_state['doc_portfolio'].to_csv(csv_buffer, index=False)
+        portfolio_data.to_csv(csv_buffer, index=False)
         csv_buffer.seek(0)
-        df_port, sector_alloc, suggestions, total_val = process_portfolio(csv_buffer, display_currency)
-        # Display results (same as above)
-        if df_port is not None:
+        
+        with st.spinner("Analyzing document holdings..."):
+            df_port, sector_alloc, suggestions, total_val = process_portfolio(csv_buffer, display_currency)
+        
+        if df_port is not None and not df_port.empty:
             sym = "$" if display_currency == "USD" else "€"
             st.metric("Total Portfolio Value", f"{sym}{total_val:,.2f}")
+            
             st.subheader("Holdings Summary")
             display_cols = ['Ticker', 'Name', 'Sector', 'Shares', 'Current Price', 'Current Value', 'Allocation %', '30d Target', '30d Growth %']
             st.dataframe(df_port[display_cols].style.format({
@@ -694,15 +881,19 @@ if 'doc_portfolio' in st.session_state:
                 '30d Target': f'{sym}{{:.2f}}',
                 '30d Growth %': '{:.1f}%'
             }))
-            if sector_alloc is not None:
+            
+            if sector_alloc is not None and not sector_alloc.empty:
                 st.subheader("Sector Allocation")
                 fig, ax = plt.subplots()
                 ax.pie(sector_alloc['Current Value'], labels=sector_alloc['Sector'], autopct='%1.1f%%', startangle=90)
                 ax.axis('equal')
                 st.pyplot(fig)
+            
             if suggestions:
                 st.subheader("💡 Diversification Suggestions")
                 for s in suggestions:
                     st.markdown(f"- {s}")
             else:
                 st.success("✅ Portfolio appears well-diversified.")
+        else:
+            st.error("Could not analyze document holdings.")
