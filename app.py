@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 import re
 
-# Document extraction libraries
+# Document extraction libraries (pure Python, no system deps)
 try:
     from pypdf import PdfReader
     import docx
@@ -25,7 +25,7 @@ try:
     DOC_EXTRACTION_AVAILABLE = True
 except ImportError:
     DOC_EXTRACTION_AVAILABLE = False
-    st.warning("Document extraction libraries not installed. Install pypdf, python-docx, reticker for PDF/Word support.")
+    st.warning("For PDF/Word upload, install: pypdf, python-docx, reticker")
 
 # 1. UI SETUP & THEME-AWARE CSS
 st.set_page_config(page_title="Strategic AI Investment Architect", layout="wide")
@@ -58,9 +58,9 @@ st.markdown("""
 
 # 2. DISCLAIMER
 st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders. AI projections are mathematical and adjusted for market volatility.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (V10.0 - Automatic Analysis)")
+st.title("🏛️ Strategic AI Investment Architect (V10.1 - Enhanced PDF Feedback)")
 
-# 3. RATE LIMITER
+# 3. RATE LIMITER (to avoid Yahoo Finance 429)
 class RateLimiter:
     def __init__(self, calls_per_second=0.3):
         self.calls_per_second = calls_per_second
@@ -252,7 +252,7 @@ def volume_trend_message(df_vol):
     else:
         return "➡️ Neutral volume trend."
 
-# 5. DOCUMENT EXTRACTION CLASS
+# 5. DOCUMENT EXTRACTION CLASS (Enhanced with debug info)
 class DocumentPortfolioExtractor:
     def __init__(self):
         if DOC_EXTRACTION_AVAILABLE:
@@ -272,20 +272,31 @@ class DocumentPortfolioExtractor:
     def extract_text_from_pdf(self, file_path):
         try:
             reader = PdfReader(file_path)
-            return "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
-        except: return ""
+            text = ""
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + "\n"
+            return text
+        except Exception as e:
+            st.warning(f"PDF extraction error: {e}")
+            return ""
 
     def extract_text_from_docx(self, file_path):
         try:
             doc = docx.Document(file_path)
             return "\n".join([para.text for para in doc.paragraphs])
-        except: return ""
+        except Exception as e:
+            st.warning(f"DOCX extraction error: {e}")
+            return ""
 
     def find_tickers_regex(self, text):
+        # Pattern for common stock tickers (1-5 uppercase letters)
         pattern = r'\b[A-Z]{1,5}\b'
         matches = re.findall(pattern, text)
-        blacklist = {'ETF', 'USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'THE', 'AND', 'FOR', 'INC', 'LTD'}
-        return [m for m in matches if m not in blacklist][:20]
+        # Blacklist common false positives
+        blacklist = {'ETF', 'USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'THE', 'AND', 'FOR', 'INC', 'LTD', 'LLC', 'NYSE', 'NASDAQ'}
+        return [m for m in matches if m not in blacklist]
 
     def process_document(self, file_path):
         ext = Path(file_path).suffix.lower()
@@ -294,17 +305,26 @@ class DocumentPortfolioExtractor:
         elif ext in ['.docx', '.doc']:
             text = self.extract_text_from_docx(file_path)
         else:
-            return [], "Unsupported file type"
-        if not text:
-            return [], "No text could be extracted"
+            return [], "Unsupported file type", ""
+
+        if not text.strip():
+            return [], "No text could be extracted. The file may be scanned (image-based) or empty.", ""
+
+        # Show preview of extracted text (for debugging)
+        preview = text[:1000] + "..." if len(text) > 1000 else text
+
         # Find tickers
         if self.ticker_extractor:
             raw_tickers = self.ticker_extractor.extract(text)
         else:
             raw_tickers = self.find_tickers_regex(text)
+
+        # Remove duplicates
+        raw_tickers = list(set(raw_tickers))
+
         # Validate with yFinance
         holdings = []
-        for ticker in raw_tickers[:10]:
+        for ticker in raw_tickers[:15]:  # Limit to 15 to avoid rate limits
             try:
                 rate_limiter.wait()
                 t_obj = yf.Ticker(ticker)
@@ -313,13 +333,14 @@ class DocumentPortfolioExtractor:
                     holdings.append({
                         'ticker': ticker,
                         'name': info.get('longName', ticker),
-                        'shares': 1,
+                        'shares': 1,  # Default; we could try to extract numbers but keep simple
                         'sector': info.get('sector', 'Unknown'),
                         'current_price': info.get('regularMarketPrice')
                     })
-            except:
+            except Exception as e:
                 continue
-        return holdings, text[:500]
+
+        return holdings, preview, f"Found {len(raw_tickers)} potential tickers, {len(holdings)} validated."
 
 # 6. PORTFOLIO ANALYSIS FUNCTIONS
 def analyze_ticker_basic(ticker, display_currency):
@@ -345,7 +366,6 @@ def analyze_ticker_basic(ticker, display_currency):
 
 def process_uploaded_file(uploaded_file):
     """Handle any uploaded file: CSV, Excel, PDF, Word"""
-    file_type = uploaded_file.type
     file_name = uploaded_file.name.lower()
 
     # CSV / Excel
@@ -361,7 +381,7 @@ def process_uploaded_file(uploaded_file):
                 return None
             if 'shares' not in df.columns:
                 df['shares'] = 1
-            return {'type': 'tabular', 'data': df}
+            return {'type': 'tabular', 'data': df, 'preview': None}
         except Exception as e:
             st.error(f"Error reading file: {e}")
             return None
@@ -373,13 +393,20 @@ def process_uploaded_file(uploaded_file):
         with open(temp_path, 'wb') as f:
             f.write(uploaded_file.getbuffer())
         extractor = DocumentPortfolioExtractor()
-        holdings, preview = extractor.process_document(temp_path)
+        holdings, preview, message = extractor.process_document(temp_path)
         os.remove(temp_path)
+
+        # Show extraction details (expandable)
+        with st.expander("📄 Document Extraction Details"):
+            st.text(message)
+            st.text("Extracted text preview:")
+            st.code(preview)
+
         if holdings:
             df = pd.DataFrame(holdings)
-            return {'type': 'tabular', 'data': df}
+            return {'type': 'tabular', 'data': df, 'preview': preview}
         else:
-            st.warning("No holdings found in document.")
+            st.warning("No valid stock tickers found in the document. The document may be scanned or contain no recognizable tickers.")
             return None
     else:
         st.error("Unsupported file type. Please upload CSV, Excel, PDF, or Word document.")
@@ -551,10 +578,12 @@ if uploaded_file is not None:
         results_list = []
         total_value = 0
         progress_bar = st.progress(0)
+        status_text = st.empty()
         
         for idx, row in df_holdings.iterrows():
             ticker = str(row['ticker']).strip().upper()
             shares = float(row['shares']) if 'shares' in row else 1
+            status_text.text(f"Analyzing {ticker}... ({idx+1}/{len(df_holdings)})")
             progress_bar.progress((idx + 1) / len(df_holdings))
             
             analysis = analyze_ticker_basic(ticker, display_currency)
@@ -569,8 +598,11 @@ if uploaded_file is not None:
                     'Current Price': analysis['price'],
                     'Current Value': value
                 })
+            else:
+                st.warning(f"Could not analyze {ticker} – skipping.")
         
         progress_bar.empty()
+        status_text.empty()
         
         if results_list:
             df_results = pd.DataFrame(results_list)
@@ -596,4 +628,4 @@ if uploaded_file is not None:
                 ax.axis('equal')
                 st.pyplot(fig)
         else:
-            st.error("No valid tickers could be analyzed.")
+            st.error("No valid tickers could be analyzed. Check the file format and ticker symbols.")
