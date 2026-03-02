@@ -1,11 +1,13 @@
 streamlit
 pandas
 numpy
+prophet
 pandas-datareader
 requests
 beautifulsoup4
 textblob
 matplotlib
+yfinance
 openpyxl
 xlrd
 pypdf
