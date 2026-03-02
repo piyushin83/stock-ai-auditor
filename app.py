@@ -16,29 +16,34 @@ import io
 import os
 from pathlib import Path
 import re
+import traceback
 import warnings
 warnings.filterwarnings('ignore')
 
-# Document/image extraction with fallback
+# -------------------------------
+# 0. CHECK DEPENDENCIES (with helpful messages)
+# -------------------------------
+missing_libs = []
 try:
     from pypdf import PdfReader
     import docx
     import reticker
     PDF_DOCX_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     PDF_DOCX_AVAILABLE = False
-    st.warning("For PDF/Word upload, install: pypdf, python-docx, reticker")
+    missing_libs.append("pypdf, python-docx, reticker")
 
-# OCR - we'll attempt to import, but handle gracefully
 try:
     import easyocr
     import torch
     OCR_AVAILABLE = True
-    # Lazy load reader to avoid startup delay
     ocr_reader = None
-except ImportError:
+except ImportError as e:
     OCR_AVAILABLE = False
-    st.warning("For image OCR, install: easyocr, torch. Image upload will use basic text extraction only.")
+    missing_libs.append("easyocr, torch")
+
+if missing_libs:
+    st.sidebar.warning(f"Missing libraries: {', '.join(missing_libs)}. Some file types may not work. Install with: pip install " + " ".join(missing_libs))
 
 # 1. UI SETUP & THEME-AWARE CSS
 st.set_page_config(page_title="Strategic AI Investment Architect", layout="wide")
@@ -70,7 +75,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="disclaimer-container">🚨 <b>LEGAL:</b> Educational Tool Only. Fibonacci targets are contingency buy orders. AI projections are mathematical and adjusted for market volatility.</div>', unsafe_allow_html=True)
-st.title("🏛️ Strategic AI Investment Architect (V11.1 - Cloud Optimized)")
+st.title("🏛️ Strategic AI Investment Architect (V11.3 - Error Robust)")
 
 # 3. RATE LIMITER
 class RateLimiter:
@@ -89,7 +94,14 @@ class RateLimiter:
 
 rate_limiter = RateLimiter(calls_per_second=0.3)
 
-# 4. HELPER FUNCTIONS (same as before)
+# 4. HELPER FUNCTIONS (with error capture)
+def safe_request(func, *args, **kwargs):
+    """Execute a function and return (result, error_message)"""
+    try:
+        return func(*args, **kwargs), None
+    except Exception as e:
+        return None, str(e) + "\n" + traceback.format_exc()
+
 @st.cache_data(ttl=3600)
 def get_exchange_rate(from_curr, to_curr):
     if from_curr == to_curr: return 1.0
@@ -98,7 +110,8 @@ def get_exchange_rate(from_curr, to_curr):
         rate_limiter.wait()
         data = yf.download(pair, period="1d", progress=False)
         return float(data['Close'].iloc[-1]) if not data.empty else 1.0
-    except: 
+    except Exception as e:
+        st.warning(f"Exchange rate error: {e}")
         return 1.0
 
 @st.cache_data(ttl=3600)
@@ -110,7 +123,7 @@ def resolve_smart_ticker(user_input):
         if t_obj.fast_info.get('lastPrice') is not None:
             name = t_obj.info.get('longName', ticker_str)
             curr = t_obj.fast_info.get('currency', 'USD')
-            return ticker_str, name, ".US", curr
+            return ticker_str, name, ".US", curr, None
         rate_limiter.wait()
         s = yf.Search(ticker_str, max_results=1)
         if s.tickers:
@@ -118,11 +131,10 @@ def resolve_smart_ticker(user_input):
             ticker = res['symbol']; name = res.get('longname', ticker)
             t_obj_fb = yf.Ticker(ticker)
             native_curr = t_obj_fb.fast_info.get('currency', 'USD')
-            return ticker, name, "", native_curr
+            return ticker, name, "", native_curr, None
     except Exception as e:
-        if '429' in str(e):
-            time.sleep(5)
-    return ticker_str, ticker_str, ".US", "USD"
+        return ticker_str, ticker_str, ".US", "USD", str(e)
+    return ticker_str, ticker_str, ".US", "USD", None
 
 @st.cache_data(ttl=1800)
 def get_enhanced_news(ticker):
@@ -154,8 +166,8 @@ def get_enhanced_news(ticker):
                         headlines.append({'date': dt, 'headline': headline, 'sentiment': sentiment, 'source': 'Finviz'})
                 except:
                     continue
-    except:
-        pass
+    except Exception as e:
+        st.warning(f"Finviz news error: {e}")
     # Yahoo Finance
     try:
         rate_limiter.wait()
@@ -172,8 +184,9 @@ def get_enhanced_news(ticker):
                 headlines.append({'date': dt, 'headline': title, 'sentiment': sentiment, 'source': 'Yahoo'})
             except:
                 continue
-    except:
-        pass
+    except Exception as e:
+        st.warning(f"Yahoo news error: {e}")
+    # Remove duplicates
     unique = []
     seen = set()
     for h in headlines:
@@ -217,7 +230,7 @@ def get_fundamental_health(ticker, suffix):
         if df.empty:
             end = datetime.datetime.now(); start = end - datetime.timedelta(days=1825)
             df = web.DataReader(f"{ticker}{suffix}", 'stooq', start, end)
-        if df is None or df.empty: return None, None
+        if df is None or df.empty: return None, None, "No historical data"
         df = df.reset_index().rename(columns={'Date': 'ds', 'Close': 'y', 'Volume': 'vol'}).sort_values('ds')
         df['ds'] = df['ds'].dt.tz_localize(None)
         health = {"ROE": 0, "Debt": 0, "PB": 0, "Margin": "N/A", "CurrentRatio": "N/A"}
@@ -234,11 +247,11 @@ def get_fundamental_health(ticker, suffix):
                 "Margin": fvz("Profit Margin") + "%",
                 "CurrentRatio": fvz("Current Ratio")
             }
-        except: pass
-        return df, health
+        except Exception as e:
+            pass
+        return df, health, None
     except Exception as e:
-        if '429' in str(e): time.sleep(10)
-        return None, None
+        return None, None, str(e)
 
 def volume_trend_message(df_vol):
     if df_vol.empty or len(df_vol) < 20: return "Insufficient volume data."
@@ -263,7 +276,7 @@ def volume_trend_message(df_vol):
     else:
         return "➡️ Neutral volume trend."
 
-# 5. DOCUMENT/IMAGE EXTRACTION CLASS (with OCR fallback)
+# 5. DOCUMENT/IMAGE EXTRACTION CLASS (with error capture)
 class PortfolioExtractor:
     def __init__(self):
         self.ticker_extractor = None
@@ -284,10 +297,9 @@ class PortfolioExtractor:
     def _get_ocr_reader(self):
         if self.ocr_reader is None and self.ocr_available:
             try:
-                # Attempt to load the model; if it fails, disable OCR
                 self.ocr_reader = easyocr.Reader(['en'], gpu=False)
             except Exception as e:
-                st.warning(f"OCR model download failed: {e}. Image upload will use basic text extraction only.")
+                st.warning(f"OCR model load failed: {e}. Will use regex only.")
                 self.ocr_available = False
         return self.ocr_reader
 
@@ -295,30 +307,28 @@ class PortfolioExtractor:
         try:
             reader = PdfReader(file_path)
             text = "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
-            return text
+            return text, None
         except Exception as e:
-            return ""
+            return "", str(e)
 
     def extract_text_from_docx(self, file_path):
         try:
             doc = docx.Document(file_path)
-            return "\n".join([para.text for para in doc.paragraphs])
+            return "\n".join([para.text for para in doc.paragraphs]), None
         except Exception as e:
-            return ""
+            return "", str(e)
 
     def extract_text_from_image(self, file_path):
-        """OCR using easyocr with graceful failure"""
         if not self.ocr_available:
-            return ""
+            return "", "OCR not available"
         reader = self._get_ocr_reader()
         if reader is None:
-            return ""
+            return "", "OCR reader not initialized"
         try:
             result = reader.readtext(file_path, detail=0, paragraph=True)
-            return "\n".join(result)
+            return "\n".join(result), None
         except Exception as e:
-            st.warning(f"OCR processing error: {e}")
-            return ""
+            return "", str(e)
 
     def find_tickers_regex(self, text):
         pattern = r'\b[A-Z]{1,5}\b'
@@ -327,7 +337,6 @@ class PortfolioExtractor:
         return list(set([m for m in matches if m not in blacklist]))
 
     def extract_quantities(self, text, ticker):
-        """Find share count near ticker mentions."""
         patterns = [
             rf'{ticker}\s+(\d+(?:\.\d+)?)',
             rf'(\d+(?:\.\d+)?)\s+{ticker}',
@@ -344,29 +353,32 @@ class PortfolioExtractor:
     def process_file(self, file_path):
         ext = Path(file_path).suffix.lower()
         text = ""
+        error = None
         if ext == '.pdf':
-            text = self.extract_text_from_pdf(file_path)
+            text, error = self.extract_text_from_pdf(file_path)
         elif ext in ['.docx', '.doc']:
-            text = self.extract_text_from_docx(file_path)
+            text, error = self.extract_text_from_docx(file_path)
         elif ext in ['.png', '.jpg', '.jpeg', '.tiff', '.bmp']:
-            text = self.extract_text_from_image(file_path)
+            text, error = self.extract_text_from_image(file_path)
         else:
             return [], "Unsupported file type", ""
+
+        if error:
+            return [], f"Extraction error: {error}", ""
 
         if not text.strip():
             return [], "No text could be extracted. File may be empty, scanned (image), or corrupted.", ""
 
         preview = text[:1000] + "..." if len(text) > 1000 else text
 
-        # Find tickers
         if self.ticker_extractor:
             raw_tickers = self.ticker_extractor.extract(text)
         else:
             raw_tickers = self.find_tickers_regex(text)
         raw_tickers = list(set(raw_tickers))
 
-        # Validate with yFinance and extract quantities
         holdings = []
+        validation_errors = []
         for ticker in raw_tickers[:15]:
             try:
                 rate_limiter.wait()
@@ -381,10 +393,12 @@ class PortfolioExtractor:
                         'sector': info.get('sector', 'Unknown'),
                         'current_price': info.get('regularMarketPrice')
                     })
-            except Exception:
-                continue
+                else:
+                    validation_errors.append(f"{ticker}: no market price")
+            except Exception as e:
+                validation_errors.append(f"{ticker}: {str(e)}")
 
-        return holdings, preview, f"Found {len(raw_tickers)} potential tickers, {len(holdings)} validated."
+        return holdings, preview, f"Found {len(raw_tickers)} potential tickers, {len(holdings)} validated. Errors: {validation_errors}"
 
 # 6. PORTFOLIO ANALYSIS & DIVERSIFICATION SUGGESTIONS
 def analyze_ticker_basic(ticker, display_currency):
@@ -394,7 +408,7 @@ def analyze_ticker_basic(ticker, display_currency):
         info = t_obj.info
         price = info.get('regularMarketPrice')
         if not price:
-            return None
+            return None, "No market price"
         currency = info.get('currency', 'USD')
         fx = get_exchange_rate(currency, display_currency)
         price_display = price * fx
@@ -403,15 +417,11 @@ def analyze_ticker_basic(ticker, display_currency):
             'sector': info.get('sector', 'Unknown'),
             'price': price_display,
             'currency': currency
-        }
-    except:
-        return None
+        }, None
+    except Exception as e:
+        return None, str(e)
 
 def suggest_diversification(current_sectors, total_value):
-    """
-    Suggest sectors to add and provide example stocks/ETFs.
-    current_sectors: dict {sector: allocation_percentage}
-    """
     suggestions = []
     sector_examples = {
         'Technology': ['AAPL', 'MSFT', 'QQQ'],
@@ -435,7 +445,6 @@ def suggest_diversification(current_sectors, total_value):
     return suggestions[:5]
 
 def process_uploaded_file(uploaded_file):
-    """Handle CSV, Excel, PDF, Word, Images"""
     file_name = uploaded_file.name.lower()
     ext = Path(file_name).suffix
 
@@ -457,11 +466,12 @@ def process_uploaded_file(uploaded_file):
             return {'type': 'tabular', 'data': df, 'preview': None}
         except Exception as e:
             st.error(f"Error reading file: {e}")
+            with st.expander("Full error traceback"):
+                st.code(traceback.format_exc())
             return None
 
     # PDF/Word/Image
     elif ext in ['.pdf', '.docx', '.doc', '.png', '.jpg', '.jpeg', '.tiff', '.bmp']:
-        # Check if we have the necessary libraries
         if ext in ['.pdf', '.docx', '.doc'] and not PDF_DOCX_AVAILABLE:
             st.error("PDF/Word support not installed. Please install pypdf, python-docx, reticker.")
             return None
@@ -500,11 +510,19 @@ uploaded_file = st.sidebar.file_uploader(
     type=['csv', 'xlsx', 'xls', 'pdf', 'docx', 'doc', 'png', 'jpg', 'jpeg', 'tiff', 'bmp']
 )
 
-# 8. SINGLE TICKER DEEP AUDIT (unchanged)
+# 8. SINGLE TICKER DEEP AUDIT
 if st.sidebar.button("🚀 Run Deep Audit"):
     with st.spinner(f"Analyzing {user_query}... (may take a moment)"):
-        ticker, name, suffix, native_curr = resolve_smart_ticker(user_query)
-        df, health = get_fundamental_health(ticker, suffix)
+        ticker, name, suffix, native_curr, resolve_error = resolve_smart_ticker(user_query)
+        if resolve_error:
+            st.warning(f"Ticker resolution issue: {resolve_error}")
+        # Ensure name is not empty
+        display_name = name if name and name != ticker else ticker
+        
+        df, health, hist_error = get_fundamental_health(ticker, suffix)
+        if hist_error:
+            st.error(f"Historical data error: {hist_error}")
+        
         if df is not None:
             fx = get_exchange_rate(native_curr, display_currency)
             sym = "$" if display_currency == "USD" else "€"
@@ -513,21 +531,37 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             df['50_Day_Moving_Average'] = df['y'].rolling(window=50).mean()
             df['200_Day_Moving_Average'] = df['y'].rolling(window=200).mean()
             
-            m = Prophet(daily_seasonality=False, weekly_seasonality=True, yearly_seasonality=True,
-                        changepoint_prior_scale=0.08, changepoint_range=0.9, seasonality_mode='additive')
-            m.fit(df[['ds', 'y']])
-            future = m.make_future_dataframe(periods=180)
-            forecast = m.predict(future)
-            hist_min, hist_max = df['y'].min(), df['y'].max()
-            forecast['yhat'] = forecast['yhat'].clip(lower=hist_min*0.5, upper=hist_max*2)
-            forecast['yhat_lower'] = forecast['yhat_lower'].clip(lower=hist_min*0.5, upper=hist_max*2)
-            forecast['yhat_upper'] = forecast['yhat_upper'].clip(lower=hist_min*0.5, upper=hist_max*2)
+            # Prophet forecast
+            try:
+                m = Prophet(daily_seasonality=False, weekly_seasonality=True, yearly_seasonality=True,
+                            changepoint_prior_scale=0.08, changepoint_range=0.9, seasonality_mode='additive')
+                m.fit(df[['ds', 'y']])
+                future = m.make_future_dataframe(periods=180)
+                forecast = m.predict(future)
+                hist_min, hist_max = df['y'].min(), df['y'].max()
+                forecast['yhat'] = forecast['yhat'].clip(lower=hist_min*0.5, upper=hist_max*2)
+                forecast['yhat_lower'] = forecast['yhat_lower'].clip(lower=hist_min*0.5, upper=hist_max*2)
+                forecast['yhat_upper'] = forecast['yhat_upper'].clip(lower=hist_min*0.5, upper=hist_max*2)
+                
+                trend_val = forecast[forecast['ds'] == df['ds'].iloc[-1]]['yhat'].values[0] * fx
+                deviation = ((cur_p - trend_val) / trend_val) * 100
+                fair_low = trend_val * 0.95
+                fair_high = trend_val * 1.05
+                
+                target_p_30 = forecast['yhat'].iloc[len(df) + 29] * fx
+            except Exception as e:
+                st.warning(f"Prophet forecast failed: {e}. Using simple projection.")
+                trend_val = cur_p
+                deviation = 0
+                fair_low = cur_p * 0.95
+                fair_high = cur_p * 1.05
+                target_p_30 = cur_p * 1.05  # simple 5% growth
+            finally:
+                # Ensure target is defined even if forecast failed
+                if 'target_p_30' not in locals():
+                    target_p_30 = cur_p * 1.05
             
-            trend_val = forecast[forecast['ds'] == df['ds'].iloc[-1]]['yhat'].values[0] * fx
-            deviation = ((cur_p - trend_val) / trend_val) * 100
-            fair_low = trend_val * 0.95
-            fair_high = trend_val * 1.05
-            
+            # Moving average cross detection
             is_death_cross = df['50_Day_Moving_Average'].iloc[-1] < df['200_Day_Moving_Average'].iloc[-1]
             crossover_msg = "Price stability detected."
             cross_point = None
@@ -540,8 +574,8 @@ if st.sidebar.button("🚀 Run Deep Audit"):
                     cross_point = (df['ds'].iloc[i], df['50_Day_Moving_Average'].iloc[i], "DEATH")
                     crossover_msg = "⚠️ DEATH CROSS: 50-Day Moving Average crossed BELOW 200-Day."
             
-            target_p_30 = forecast['yhat'].iloc[len(df) + 29] * fx
-            if is_death_cross: target_p_30 *= 0.96
+            if is_death_cross: 
+                target_p_30 *= 0.96
             ai_roi_30 = ((target_p_30 - cur_p) / cur_p) * 100
             
             rsi, fibs = calculate_technicals(df)
@@ -550,6 +584,7 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             headlines_display = [f"{'🟢' if n['sentiment']>0 else '🔴' if n['sentiment']<0 else '⚪'} {n['headline']}" for n in all_news[:5]]
             avg_news_sentiment = np.mean([n['sentiment'] for n in impactful_news]) if impactful_news else 0
             
+            # Conviction score
             score = 15
             if not is_death_cross: score += 20
             if health['ROE'] > 0.12: score += 20
@@ -563,22 +598,29 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             
             sl_price = cur_p * (0.95 if rsi > 70 else 0.85 if rsi < 30 else 0.90)
             
-            # DISPLAY (same as original)
-            st.subheader(f"📊 {name} Analysis ({ticker})")
+            # DISPLAY
+            st.subheader(f"📊 {display_name} Analysis ({ticker})")
+            
             col_f1, col_f2 = st.columns(2)
             with col_f1:
-                if deviation > 15: st.warning(f"⚠️ MEAN REVERSION RISK: Price is {deviation:.1f}% above AI baseline trend.")
-                else: st.success(f"✅ TREND ALIGNMENT: Price is within {deviation:.1f}% of AI baseline.")
+                if deviation > 15:
+                    st.warning(f"⚠️ MEAN REVERSION RISK: Price is {deviation:.1f}% above AI baseline trend.")
+                else:
+                    st.success(f"✅ TREND ALIGNMENT: Price is within {deviation:.1f}% of AI baseline.")
             with col_f2:
                 st.info(f"💎 AI FAIR VALUE RANGE: {sym}{fair_low:,.2f} - {sym}{fair_high:,.2f}")
+
             st.markdown(f'<div class="impact-announcement">{crossover_msg}</div>', unsafe_allow_html=True)
+            
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Conviction Score", f"{score}/100")
             m2.metric("Current Price", f"{sym}{cur_p:,.2f}")
             m3.metric("30d AI Growth", f"{ai_roi_30:.1f}%")
             m4.metric("30d AI Target", f"{sym}{target_p_30:,.2f}")
+
             st.markdown(f'<div class="verdict-box {v_col}">Strategic Verdict: {verdict} | {action}</div>', unsafe_allow_html=True)
             st.markdown(f'<div class="stop-loss-box">🛑 AGGRESSIVE STOP LOSS: {sym}{sl_price:,.2f}</div>', unsafe_allow_html=True)
+
             col_l, col_r = st.columns(2)
             with col_l:
                 st.markdown("### 🏥 Company Health")
@@ -588,7 +630,9 @@ if st.sidebar.button("🚀 Run Deep Audit"):
                     "Rating": ["✅ Prime" if health['ROE'] > 0.15 else "⚠️ Weak", "✅ Healthy" if health['PB'] < 3.0 else "⚠️ Expensive", "✅ Safe", "✅ Liquid"]
                 }))
                 st.markdown("### 📰 Recent Headlines")
-                for h in headlines_display: st.markdown(f'<div class="news-card">{h}</div>', unsafe_allow_html=True)
+                for h in headlines_display: 
+                    st.markdown(f'<div class="news-card">{h}</div>', unsafe_allow_html=True)
+
             with col_r:
                 st.markdown("### ⚖️ Strategy & Fibonacci Limits")
                 st.markdown(f"""<div class="phase-card">
@@ -600,18 +644,28 @@ if st.sidebar.button("🚀 Run Deep Audit"):
                     <div class="fib-box">🔹 Target 2 (0.500): {sym}{fibs['0.500']*fx:,.2f}</div>
                     <div class="fib-box">🔹 Target 3 (0.618): {sym}{fibs['0.618']*fx:,.2f}</div>
                 </div>""", unsafe_allow_html=True)
+
             if impactful_news:
                 st.markdown("### 🔥 News Likely to Impact Price")
                 for news in impactful_news[:7]:
                     emoji = '🟢' if news['sentiment'] > 0.1 else '🔴' if news['sentiment'] < -0.1 else '⚪'
                     date_str = news['date'].strftime("%b %d, %Y")
-                    st.markdown(f'<div class="impact-news"><b>{emoji} {news["headline"]}</b><br><span style="font-size:0.85rem;">{date_str} · {news["source"]} · Sentiment: {news["sentiment"]:.2f}</span></div>', unsafe_allow_html=True)
+                    st.markdown(f"""
+                    <div class="impact-news">
+                        <b>{emoji} {news['headline']}</b><br>
+                        <span style="font-size:0.85rem;">{date_str} · {news['source']} · Sentiment: {news['sentiment']:.2f}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+
             st.markdown("---")
             st.subheader("🤖 AI Stock 180-Day Projection")
             fig, ax = plt.subplots(figsize=(12,6))
-            forecast_plot = forecast.copy()
-            forecast_plot[['yhat','yhat_lower','yhat_upper']] *= fx
-            m.plot(forecast_plot, ax=ax)
+            try:
+                forecast_plot = forecast.copy()
+                forecast_plot[['yhat','yhat_lower','yhat_upper']] *= fx
+                m.plot(forecast_plot, ax=ax)
+            except:
+                ax.plot(df['ds'], df['y']*fx, 'b-', label='Historical')
             ax.plot(df['ds'], df['50_Day_Moving_Average']*fx, label='50-Day MA', color='orange', linewidth=2)
             ax.plot(df['ds'], df['200_Day_Moving_Average']*fx, label='200-Day MA', color='red', linewidth=2)
             if cross_point:
@@ -620,22 +674,24 @@ if st.sidebar.button("🚀 Run Deep Audit"):
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
             plt.legend(loc='upper left')
             st.pyplot(fig)
+
             st.markdown("---")
             st.subheader("📊 12-Month Relative Volume Trend")
             vol_fig, vol_ax = plt.subplots(figsize=(12,4))
-            vol_df = df.tail(252).copy()
+            vol_df = df.tail(252).copy() 
             colors = ['#2e7d32' if i>0 and vol_df.iloc[i]['y'] >= vol_df.iloc[i-1]['y'] else '#c62828' for i in range(len(vol_df))]
             vol_ax.bar(vol_df['ds'], vol_df['vol'], color=colors, alpha=0.7)
             vol_ax.set_ylabel("Shares Traded")
             vol_ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
             st.pyplot(vol_fig)
+            
             st.caption("🔵 **Volume color:** Green bars = price increased from previous day; Red bars = price decreased from previous day.")
             vol_message = volume_trend_message(vol_df)
             st.info(f"📈 **Volume Insight:** {vol_message}")
         else:
-            st.error(f"Data Unreachable for {user_query}. Check symbol or try again later.")
+            st.error(f"Could not fetch data for {user_query}. Error: {hist_error}")
 
-# 9. AUTOMATIC PORTFOLIO ANALYSIS (for any uploaded file)
+# 9. AUTOMATIC PORTFOLIO ANALYSIS
 if uploaded_file is not None:
     st.markdown("---")
     st.header("📁 Uploaded File Analysis")
@@ -646,8 +702,8 @@ if uploaded_file is not None:
     if result and result['type'] == 'tabular':
         df_holdings = result['data']
         
-        # Analyze each ticker
         results_list = []
+        errors_list = []
         total_value = 0
         total_cost = 0
         progress_bar = st.progress(0)
@@ -660,7 +716,7 @@ if uploaded_file is not None:
             status_text.text(f"Analyzing {ticker}... ({idx+1}/{len(df_holdings)})")
             progress_bar.progress((idx + 1) / len(df_holdings))
             
-            analysis = analyze_ticker_basic(ticker, display_currency)
+            analysis, error = analyze_ticker_basic(ticker, display_currency)
             if analysis:
                 value = shares * analysis['price']
                 total_value += value
@@ -685,10 +741,15 @@ if uploaded_file is not None:
                     'Gain/Loss %': gain_pct
                 })
             else:
-                st.warning(f"Could not analyze {ticker} – skipping.")
+                errors_list.append(f"{ticker}: {error}")
         
         progress_bar.empty()
         status_text.empty()
+        
+        if errors_list:
+            with st.expander("⚠️ Errors encountered"):
+                for err in errors_list:
+                    st.write(err)
         
         if results_list:
             df_results = pd.DataFrame(results_list)
@@ -704,7 +765,6 @@ if uploaded_file is not None:
                 st.metric("Total Gain/Loss", f"{sym}{total_gain:,.2f} ({total_gain_pct:.1f}%)")
             
             st.subheader("Holdings")
-            # Format display
             display_df = df_results.copy()
             display_df['Current Price'] = display_df['Current Price'].apply(lambda x: f"{sym}{x:,.2f}")
             display_df['Current Value'] = display_df['Current Value'].apply(lambda x: f"{sym}{x:,.2f}")
@@ -716,7 +776,6 @@ if uploaded_file is not None:
             display_df['Allocation %'] = display_df['Allocation %'].apply(lambda x: f"{x:.1f}%" if x>0 else "0%")
             st.dataframe(display_df)
             
-            # Sector allocation
             if 'Sector' in df_results.columns:
                 st.subheader("Sector Allocation")
                 sector_data = df_results.groupby('Sector')['Current Value'].sum().reset_index()
@@ -725,7 +784,6 @@ if uploaded_file is not None:
                 ax.axis('equal')
                 st.pyplot(fig)
                 
-                # Generate diversification suggestions
                 sector_alloc_dict = dict(zip(sector_data['Sector'], sector_data['Current Value']/total_value*100))
                 suggestions = suggest_diversification(sector_alloc_dict, total_value)
                 if suggestions:
@@ -733,4 +791,4 @@ if uploaded_file is not None:
                     for s in suggestions:
                         st.info(s)
         else:
-            st.error("No valid tickers could be analyzed. Check the file format and ticker symbols.")
+            st.error("No valid tickers could be analyzed.")
