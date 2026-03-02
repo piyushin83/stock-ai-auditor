@@ -13,3 +13,5 @@ xlrd
 pypdf
 python-docx
 reticker
+easyocr
+torch
