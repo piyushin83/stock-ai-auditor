@@ -8,3 +8,4 @@ requests
 beautifulsoup4
 textblob
 matplotlib
+openpyxl==3.1.2
