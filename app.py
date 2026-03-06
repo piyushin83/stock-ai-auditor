@@ -690,12 +690,50 @@ def generate_investment_roadmap(df_results, sector_data, total_value, display_cu
 
     roadmap = []
 
-    # ── PHASE 1: Immediate rebalancing ──────────────────────────────────────
+    # ── PHASE 1: Immediate rebalancing — with specific trim targets ──────────
     phase1_actions = []
-    for sector, cur, tgt, gap in overweight[:2]:
+    for sector, cur, tgt, gap in overweight[:3]:
+        # Value to shed from this sector to reach benchmark
+        value_to_shed = total_value * (gap / 100)
+        target_value  = total_value * (tgt / 100)
+
+        # Get all holdings in this sector, sorted worst performer first
+        sector_holdings = df_results[df_results['Sector'] == sector].copy()
+        sector_holdings = sector_holdings.sort_values('Allocation %', ascending=False)
+
+        trim_lines = []
+        remaining_to_shed = value_to_shed
+        for _, row in sector_holdings.iterrows():
+            if remaining_to_shed <= 0:
+                break
+            ticker      = row['Ticker']
+            shares_held = float(row['Shares'])
+            price       = float(row['Current Price'])
+            pos_value   = float(row['Current Value'])
+
+            # Shares to sell = min(all shares, enough to cover remaining target)
+            shares_to_sell = min(shares_held, remaining_to_shed / price) if price > 0 else 0
+            shares_to_sell = max(0, round(shares_to_sell, 4))
+            sell_value     = shares_to_sell * price
+            pct_of_pos     = (shares_to_sell / shares_held * 100) if shares_held > 0 else 0
+
+            if shares_to_sell > 0:
+                trim_lines.append(
+                    f"<span class='roadmap-ticker'>{ticker}</span> "
+                    f"sell <b>{shares_to_sell:,.2f} shares</b> "
+                    f"≈ {sym}{sell_value:,.0f} "
+                    f"<span style='font-size:11px;opacity:.8;'>({pct_of_pos:.0f}% of position)</span>"
+                )
+            remaining_to_shed -= sell_value
+
+        trim_detail = ("<br>&nbsp;&nbsp;🎯 Suggested trims: " + " &nbsp;·&nbsp; ".join(trim_lines)) if trim_lines else ""
+
         phase1_actions.append(
             f"<b>Trim {sector}</b>: currently {cur:.1f}% vs {tgt}% benchmark — "
-            f"consider reducing by ~{gap:.0f}% (take profits on laggards)")
+            f"reduce by ~{gap:.0f}% · sell ≈{sym}{value_to_shed:,.0f} to reach target {sym}{target_value:,.0f}"
+            f"{trim_detail}"
+        )
+
     if concentration > 50:
         top3 = df_results.nlargest(3, 'Current Value')['Ticker'].tolist()
         phase1_actions.append(
@@ -862,14 +900,72 @@ def process_uploaded_file(uploaded_file):
                 df = pd.read_csv(uploaded_file)
             else:
                 df = pd.read_excel(uploaded_file)
-            df.columns = df.columns.str.strip().str.lower()
+
+            # ── Auto-detect columns regardless of header name ──────────────
+            # Normalise: strip whitespace, lowercase for matching
+            orig_cols = list(df.columns)
+            df.columns = df.columns.astype(str).str.strip().str.lower()
+
+            # Fuzzy column mapping: canonical name → list of accepted variants
+            COLUMN_MAP = {
+                'ticker': ['ticker', 'symbol', 'stock', 'scrip', 'security',
+                           'code', 'asset', 'instrument', 'name', 'equity'],
+                'shares': ['shares', 'qty', 'quantity', 'units', 'amount',
+                           'no of shares', 'no. of shares', 'number of shares',
+                           'holding', 'holdings', 'position', 'lots'],
+                'purchase price': ['purchase price', 'avg price', 'average price',
+                                   'avg cost', 'average cost', 'cost price',
+                                   'buy price', 'cost basis', 'price paid',
+                                   'cost', 'buy', 'bought at', 'invested price',
+                                   'acquisition price'],
+            }
+
+            rename_map = {}
+            detected = {}
+            for canonical, variants in COLUMN_MAP.items():
+                for col in df.columns:
+                    col_clean = col.strip().lower()
+                    if col_clean in variants or any(v in col_clean for v in variants):
+                        rename_map[col] = canonical
+                        detected[canonical] = col
+                        break
+
+            df.rename(columns=rename_map, inplace=True)
+
             if 'ticker' not in df.columns:
-                st.error("CSV/Excel must contain a 'Ticker' column.")
+                # Show what we found to help user fix it
+                st.error(
+                    f"Could not find a ticker/symbol column. "
+                    f"Detected columns: {', '.join(orig_cols)}. "
+                    f"Please rename your ticker column to 'Ticker' or 'Symbol'."
+                )
+                with st.expander("📋 Column detection details"):
+                    st.write("**Your columns (normalised):**", list(df.columns))
+                    st.write("**Accepted ticker column names:**", COLUMN_MAP['ticker'])
                 return None
+
+            # Show what was auto-detected so user can verify
+            if detected:
+                mapped_display = {k: v for k, v in detected.items()}
+                st.success(
+                    f"✅ Auto-detected columns: "
+                    + " | ".join(f"**{v}** → {k}" for k, v in mapped_display.items())
+                )
+
             if 'shares' not in df.columns:
+                st.warning("⚠️ No quantity/shares column found — defaulting to 1 share per holding.")
                 df['shares'] = 1
+            else:
+                df['shares'] = pd.to_numeric(df['shares'], errors='coerce').fillna(1)
+
             if 'purchase price' in df.columns:
                 df['purchase price'] = pd.to_numeric(df['purchase price'], errors='coerce')
+
+            # Clean ticker column
+            df['ticker'] = df['ticker'].astype(str).str.strip().str.upper()
+            df = df[df['ticker'].str.len() <= 6]   # drop non-ticker rows
+            df = df[df['ticker'] != 'NAN'].reset_index(drop=True)
+
             return {'type': 'tabular', 'data': df, 'preview': None}
         except Exception as e:
             st.error(f"Error reading file: {e}")
@@ -906,6 +1002,7 @@ st.sidebar.header("⚙️ Configuration")
 user_query = st.sidebar.text_input("Ticker / Symbol", value="NVDA")
 display_currency = st.sidebar.selectbox("Currency", ["USD", "EUR"])
 total_capital = st.sidebar.number_input("Capital", value=10000)
+run_audit = st.sidebar.button("🚀 Run Deep Audit")
 st.sidebar.markdown("---")
 st.sidebar.header("📁 Upload Portfolio / Document")
 uploaded_file = st.sidebar.file_uploader(
@@ -915,7 +1012,7 @@ uploaded_file = st.sidebar.file_uploader(
 
 
 # 8. SINGLE TICKER DEEP AUDIT
-if st.sidebar.button("🚀 Run Deep Audit"):
+if run_audit:
     with st.spinner(f"Analyzing {user_query}... (may take a moment)"):
         ticker, name, suffix, native_curr, resolve_error = resolve_smart_ticker(user_query)
         if resolve_error:
