@@ -515,64 +515,79 @@ def analyze_ticker_basic(ticker, display_currency):
 # CHANGE 2: Live market-intelligence scoring for roadmap ticker picks
 # ═══════════════════════════════════════════════════════════════════════
 @st.cache_data(ttl=3600)
-def score_ticker_live(ticker):
+@st.cache_data(ttl=3600)
+def batch_score_candidates(candidates_tuple):
     """
-    Score a single ticker (0–100) using live yfinance data:
-      • Analyst upside  (targetMeanPrice vs current)          → 35 %
-      • Analyst consensus (recommendationMean 1=Buy…5=Sell)   → 30 %
-      • Earnings + revenue growth                             → 20 %
-      • 52-week momentum (price position in annual range)     → 15 %
+    Score a tuple of tickers in ONE batch yf.Tickers() call — no per-ticker
+    rate-limiting delays.  Returns a dict keyed by ticker symbol.
 
-    Returns a dict with: score, upside_pct, analyst_label, summary, valid.
-    Hover the ticker badge in the UI to see the full summary.
+    Scoring weights (same logic, now fast):
+      • Analyst price-target upside   35 %
+      • Analyst consensus             30 %
+      • EPS + revenue growth          20 %
+      • 52-week momentum              15 %
     """
+    tickers_list = list(candidates_tuple)
+    results = {}
     try:
-        rate_limiter.wait()
-        info = yf.Ticker(ticker).info
-        cur    = info.get('currentPrice') or info.get('regularMarketPrice') or 0
-        target = info.get('targetMeanPrice') or 0
-        rec    = info.get('recommendationMean') or 3.0   # 1=Strong Buy, 5=Sell
-        eps_g  = info.get('earningsGrowth')  or 0
-        rev_g  = info.get('revenueGrowth')   or 0
-        lo52   = info.get('fiftyTwoWeekLow')  or cur * 0.7
-        hi52   = info.get('fiftyTwoWeekHigh') or cur * 1.3
+        # Single batch network call for all tickers
+        batch = yf.Tickers(" ".join(tickers_list))
+        for ticker in tickers_list:
+            try:
+                info = batch.tickers[ticker].info
+                cur    = info.get('currentPrice') or info.get('regularMarketPrice') or 0
+                target = info.get('targetMeanPrice') or 0
+                rec    = info.get('recommendationMean') or 3.0
+                eps_g  = info.get('earningsGrowth')  or 0
+                rev_g  = info.get('revenueGrowth')   or 0
+                lo52   = info.get('fiftyTwoWeekLow')  or cur * 0.7
+                hi52   = info.get('fiftyTwoWeekHigh') or cur * 1.3
 
-        upside        = ((target - cur) / cur * 100) if cur > 0 and target > 0 else 0
-        consensus_sc  = max(0, (5 - rec) / 4 * 100)               # 1→100, 3→50, 5→0
-        growth_sc     = min(100, max(0, (eps_g + rev_g) * 100))
-        span          = hi52 - lo52
-        momentum_sc   = ((cur - lo52) / span * 100) if span > 0 else 50
-        upside_sc     = min(100, max(0, upside * 3))               # 33 % upside → 99
+                upside       = ((target - cur) / cur * 100) if cur > 0 and target > 0 else 0
+                consensus_sc = max(0, (5 - rec) / 4 * 100)
+                growth_sc    = min(100, max(0, (eps_g + rev_g) * 100))
+                span         = hi52 - lo52
+                momentum_sc  = ((cur - lo52) / span * 100) if span > 0 else 50
+                upside_sc    = min(100, max(0, upside * 3))
 
-        score = (upside_sc * 0.35 + consensus_sc * 0.30 +
-                 growth_sc * 0.20 + momentum_sc * 0.15)
+                score = (upside_sc * 0.35 + consensus_sc * 0.30 +
+                         growth_sc * 0.20 + momentum_sc  * 0.15)
 
-        if   rec <= 1.5: label = "Strong Buy"
-        elif rec <= 2.5: label = "Buy"
-        elif rec <= 3.5: label = "Hold"
-        else:            label = "Underperform"
+                if   rec <= 1.5: label = "Strong Buy"
+                elif rec <= 2.5: label = "Buy"
+                elif rec <= 3.5: label = "Hold"
+                else:            label = "Underperform"
 
-        name = info.get('shortName') or info.get('longName') or ticker
-        summary = (f"Analyst: {label} | Upside: {upside:+.1f}% | "
-                   f"EPS Growth: {eps_g*100:.1f}% | Rev Growth: {rev_g*100:.1f}%")
-        return {'ticker': ticker, 'name': name, 'score': round(score, 1),
-                'upside_pct': round(upside, 1), 'analyst_label': label,
-                'summary': summary, 'valid': cur > 0}
+                name    = info.get('shortName') or info.get('longName') or ticker
+                summary = (f"Analyst: {label} | Upside: {upside:+.1f}% | "
+                           f"EPS Growth: {eps_g*100:.1f}% | Rev Growth: {rev_g*100:.1f}%")
+                results[ticker] = {
+                    'ticker': ticker, 'name': name, 'score': round(score, 1),
+                    'upside_pct': round(upside, 1), 'analyst_label': label,
+                    'summary': summary, 'valid': cur > 0
+                }
+            except Exception:
+                results[ticker] = {'ticker': ticker, 'name': ticker, 'score': 0,
+                                   'upside_pct': 0, 'analyst_label': 'N/A',
+                                   'summary': 'Data unavailable', 'valid': False}
     except Exception:
-        return {'ticker': ticker, 'name': ticker, 'score': 0,
-                'upside_pct': 0, 'analyst_label': 'N/A',
-                'summary': 'Data unavailable', 'valid': False}
+        for ticker in tickers_list:
+            results[ticker] = {'ticker': ticker, 'name': ticker, 'score': 0,
+                               'upside_pct': 0, 'analyst_label': 'N/A',
+                               'summary': 'Data unavailable', 'valid': False}
+    return results
 
 
 def get_best_candidates(candidate_pool, owned_tickers, top_n=3):
-    """Score every candidate live, exclude owned, return top-N sorted by score."""
-    scored = []
-    for t in candidate_pool:
-        if t.upper() in owned_tickers:
-            continue
-        r = score_ticker_live(t)
-        if r['valid']:
-            scored.append(r)
+    """
+    Batch-score all non-owned candidates in ONE network call, return top-N.
+    Uses a tuple for cache key compatibility with st.cache_data.
+    """
+    to_score = tuple(t for t in candidate_pool if t.upper() not in owned_tickers)
+    if not to_score:
+        return []
+    scored_map = batch_score_candidates(to_score)
+    scored = [v for v in scored_map.values() if v['valid']]
     scored.sort(key=lambda x: x['score'], reverse=True)
     return scored[:top_n]
 
@@ -652,6 +667,27 @@ def generate_investment_roadmap(df_results, sector_data, total_value, display_cu
     concentration = (df_results.nlargest(3, 'Current Value')['Current Value'].sum()
                      / total_value * 100) if total_value > 0 else 0
 
+    # ── Single upfront batch fetch for ALL sectors needing recommendations ──
+    # Collect every unique non-owned candidate across all relevant sectors,
+    # then score them all in ONE yf.Tickers() call. Subsequent get_best_candidates()
+    # calls hit the @st.cache_data cache instantly — no more per-ticker delays.
+    relevant_sectors = ([info for _, _, info in missing[:3]] +
+                        [info for _, _, _, _, info in underweight[:2]] +
+                        [info for _, _, info in missing[3:6]])
+    all_candidates = list(dict.fromkeys(        # preserve order, deduplicate
+        t for info in relevant_sectors
+        for t in info['candidates']
+        if t.upper() not in owned_tickers
+    ))
+    # Always include growth + income pools used in Phase 3
+    phase3_pools = ['NVDA','MSFT','GOOGL','AMD','AVGO','CRM','ADBE','NOW','SNOW','PLTR',
+                    'O','JNJ','PG','KO','VZ','NEE','VICI','ABBV','MO','T']
+    all_candidates += [t for t in phase3_pools if t.upper() not in owned_tickers and t not in all_candidates]
+
+    if all_candidates:
+        # Warm the cache — result ignored here; get_best_candidates() will use it
+        batch_score_candidates(tuple(all_candidates))
+
     roadmap = []
 
     # ── PHASE 1: Immediate rebalancing ──────────────────────────────────────
@@ -670,14 +706,13 @@ def generate_investment_roadmap(df_results, sector_data, total_value, display_cu
     roadmap.append({'phase': 'PHASE 1 — IMMEDIATE (Now → 30 Days)', 'icon': '⚡',
                     'color': '#c62828', 'actions': phase1_actions})
 
-    # ── PHASE 2: Core gap-filling — LIVE scored picks ───────────────────────
+    # ── PHASE 2: Core gap-filling — LIVE batch-scored picks ─────────────────
     phase2_actions = []
     for sector, target_pct, info in missing[:3]:
         suggested_alloc = total_value * (target_pct / 100)
         rb_key = 'low' if info['risk']=='Low' else 'med' if info['risk']=='Medium' else 'high'
         risk_badge = f"<span class='risk-badge-{rb_key}'>{info['risk']} Risk</span>"
-        with st.spinner(f"📡 Live-scoring {sector} candidates..."):
-            best = get_best_candidates(info['candidates'], owned_tickers, top_n=3)
+        best = get_best_candidates(info['candidates'], owned_tickers, top_n=3)
         picks_html = format_candidates_html(best)
         phase2_actions.append(
             f"<b>Add {sector}</b> {risk_badge}: 0% → target {target_pct}% "
@@ -689,8 +724,7 @@ def generate_investment_roadmap(df_results, sector_data, total_value, display_cu
         suggested_alloc = total_value * (gap / 100)
         rb_key = 'low' if info['risk']=='Low' else 'med' if info['risk']=='Medium' else 'high'
         risk_badge = f"<span class='risk-badge-{rb_key}'>{info['risk']} Risk</span>"
-        with st.spinner(f"📡 Live-scoring {sector} candidates..."):
-            best = get_best_candidates(info['candidates'], owned_tickers, top_n=3)
+        best = get_best_candidates(info['candidates'], owned_tickers, top_n=3)
         picks_html = format_candidates_html(best)
         phase2_actions.append(
             f"<b>Increase {sector}</b> {risk_badge}: {cur:.1f}% → {tgt}% "
@@ -702,22 +736,20 @@ def generate_investment_roadmap(df_results, sector_data, total_value, display_cu
     roadmap.append({'phase': 'PHASE 2 — CORE BUILD (1–3 Months)', 'icon': '🏗️',
                     'color': '#e65100', 'actions': phase2_actions})
 
-    # ── PHASE 3: Growth & income — LIVE scored picks ────────────────────────
+    # ── PHASE 3: Growth & income — LIVE batch-scored picks ──────────────────
     phase3_actions = []
     if tech_weight < 15:
-        with st.spinner("📡 Live-scoring AI/Tech growth candidates..."):
-            best_tech = get_best_candidates(
-                ['NVDA','MSFT','GOOGL','AMD','AVGO','CRM','ADBE','NOW','SNOW','PLTR'],
-                owned_tickers, top_n=4)
+        best_tech = get_best_candidates(
+            ['NVDA','MSFT','GOOGL','AMD','AVGO','CRM','ADBE','NOW','SNOW','PLTR'],
+            owned_tickers, top_n=4)
         phase3_actions.append(
             f"<b>Growth Layer — AI/Tech</b>: Only {tech_weight:.1f}% tech exposure. "
             f"Top live-scored names:<br>&nbsp;&nbsp;📡 {format_candidates_html(best_tech)}")
 
     if income_weight < 8:
-        with st.spinner("📡 Live-scoring dividend/income candidates..."):
-            best_div = get_best_candidates(
-                ['O','JNJ','PG','KO','VZ','NEE','VICI','ABBV','MO','T'],
-                owned_tickers, top_n=4)
+        best_div = get_best_candidates(
+            ['O','JNJ','PG','KO','VZ','NEE','VICI','ABBV','MO','T'],
+            owned_tickers, top_n=4)
         phase3_actions.append(
             f"<b>Income / Dividend Layer</b>: Only {income_weight:.1f}% in defensive/income sectors. "
             f"Top live-scored payers:<br>&nbsp;&nbsp;📡 {format_candidates_html(best_div)}")
@@ -735,12 +767,11 @@ def generate_investment_roadmap(df_results, sector_data, total_value, display_cu
     roadmap.append({'phase': 'PHASE 3 — GROWTH & INCOME LAYER (3–6 Months)', 'icon': '📈',
                     'color': '#1565c0', 'actions': phase3_actions})
 
-    # ── PHASE 4: Long-term optimisation — LIVE scored picks ─────────────────
+    # ── PHASE 4: Long-term optimisation — LIVE batch-scored picks ───────────
     remaining_missing = missing[3:]
     phase4_actions = []
     for sector, target_pct, info in remaining_missing[:3]:
-        with st.spinner(f"📡 Live-scoring {sector} candidates..."):
-            best = get_best_candidates(info['candidates'], owned_tickers, top_n=2)
+        best = get_best_candidates(info['candidates'], owned_tickers, top_n=2)
         picks_html = format_candidates_html(best)
         phase4_actions.append(
             f"<b>Complete {sector} coverage</b> (target {target_pct}%):<br>"
@@ -1198,9 +1229,10 @@ if uploaded_file is not None:
                     for s in suggestions:
                         st.info(s)
 
-                # Full roadmap with live-scored picks
-                roadmap, overweight, underweight, missing = generate_investment_roadmap(
-                    df_results, sector_data, total_value, display_currency)
+                # Full roadmap with live batch-scored picks
+                with st.spinner("📡 Fetching live market intelligence for all sectors... (one-time, cached for 1hr)"):
+                    roadmap, overweight, underweight, missing = generate_investment_roadmap(
+                        df_results, sector_data, total_value, display_currency)
                 render_investment_roadmap(roadmap, overweight, underweight, missing, sym)
 
         else:
