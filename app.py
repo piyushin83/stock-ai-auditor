@@ -7,7 +7,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from prophet import Prophet
-import pandas_datareader.data as web
+# pandas_datareader removed — not compatible with Python 3.14
 import requests
 from bs4 import BeautifulSoup
 from textblob import TextBlob
@@ -228,8 +228,12 @@ def get_fundamental_health(ticker, suffix):
         obj = yf.Ticker(ticker)
         df  = obj.history(period="5y")
         if df.empty:
-            end = datetime.datetime.now(); start = end - datetime.timedelta(days=1825)
-            df  = web.DataReader(f"{ticker}{suffix}", 'stooq', start, end)
+            # pandas_datareader removed (incompatible with Python 3.14)
+            # Try yfinance with longer period as fallback
+            try:
+                df = yf.Ticker(ticker).history(period="max")
+            except Exception:
+                pass
         if df is None or df.empty: return None, None, "No historical data"
         df = df.reset_index().rename(columns={'Date':'ds','Close':'y','Volume':'vol'}).sort_values('ds')
         df['ds'] = df['ds'].dt.tz_localize(None)
