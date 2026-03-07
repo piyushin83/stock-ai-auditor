@@ -10,3 +10,6 @@ matplotlib>=3.8.0
 bcrypt>=4.1.0
 psycopg2-binary>=2.9.9
 resend>=0.8.0
+pypdf>=4.0.0
+python-docx>=1.1.0
+reticker>=0.5.0
