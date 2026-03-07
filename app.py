@@ -1,9 +1,12 @@
-# ── Multi-user auth gate — must be FIRST ─────────────────────────────────────
+import streamlit as st
+
+# ── set_page_config MUST be the absolute first st.* call ─────────────────────
+st.set_page_config(page_title="Strategic AI Investment Architect", layout="wide")
+
+# ── Multi-user auth gate — runs right after set_page_config ──────────────────
 from auth import require_auth, logout_button
 _current_user = require_auth()
 # ─────────────────────────────────────────────────────────────────────────────
-
-import streamlit as st
 import pandas as pd
 import numpy as np
 from prophet import Prophet
@@ -27,12 +30,27 @@ warnings.filterwarnings('ignore')
 # ── Hide Streamlit chrome ─────────────────────────────────────────────────────
 _HIDE_ST_STYLE = """
 <style>
-    #MainMenu {visibility:hidden;} footer {visibility:hidden;}
-    header {visibility:hidden;} [data-testid="stToolbar"] {visibility:hidden;}
-    [data-testid="stDecoration"] {display:none;}
-    [data-testid="stStatusWidget"] {visibility:hidden;}
+    #MainMenu {visibility:hidden !important; display:none !important;}
+    footer {visibility:hidden !important; display:none !important;}
+    header {visibility:hidden !important; display:none !important;}
+    [data-testid="stToolbar"]      {visibility:hidden !important; display:none !important;}
+    [data-testid="stDecoration"]   {display:none !important;}
+    [data-testid="stStatusWidget"] {visibility:hidden !important; display:none !important;}
+    [data-testid="manage-app-button"] {display:none !important;}
     .viewerBadge_container__1QSob {display:none !important;}
-    .stDeployButton {display:none !important;}
+    .stDeployButton               {display:none !important;}
+    ._profileContainer_gzau3_53   {display:none !important;}
+    ._chatAvatarIcon_gzau3_37      {display:none !important;}
+    .styles_viewerBadge__CvC9N    {display:none !important;}
+    iframe[title="streamlit_feedback.streamlit_feedback"] {display:none !important;}
+    div[class*="StatusWidget"]    {display:none !important;}
+    div[class*="manageApp"]       {display:none !important;}
+    button[kind="header"]         {display:none !important;}
+    /* Hide bottom-right manage app bar entirely */
+    .st-emotion-cache-h4xjwg      {display:none !important;}
+    .st-emotion-cache-1dp5vir      {display:none !important;}
+    section[data-testid="stBottom"] {display:none !important;}
+    div[data-testid="stBottom"]   {display:none !important;}
 </style>
 """
 
@@ -54,7 +72,6 @@ except ImportError:
     OCR_AVAILABLE = False
 
 # ── Page config & CSS ─────────────────────────────────────────────────────────
-st.set_page_config(page_title="Strategic AI Investment Architect", layout="wide")
 st.markdown(_HIDE_ST_STYLE + """
 <style>
     [data-testid="stMetricValue"] { font-size:26px !important; font-weight:800 !important; color:#1f77b4; }
