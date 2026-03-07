@@ -17,9 +17,15 @@ import string
 import os
 import re
 import datetime
-import psycopg2
-import psycopg2.extras
 import resend
+import urllib.parse
+
+# psycopg2 with fallback
+try:
+    import psycopg2
+    import psycopg2.extras
+except ImportError:
+    psycopg2 = None
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONFIG — reads from st.secrets (Streamlit Cloud) with os.environ fallback
@@ -63,11 +69,41 @@ _HIDE_CSS = """
 def _get_db():
     url = _db_url()
     if not url:
-        st.error("⚠️ DATABASE_URL not configured. Go to Streamlit Cloud → your app → Settings → Secrets and add: DATABASE_URL = \"your-supabase-connection-string\"")
+        st.error("⚠️ DATABASE_URL not set. Go to Streamlit Cloud → your app → ⋮ → Settings → Secrets and add DATABASE_URL.")
         st.stop()
-    conn = psycopg2.connect(url, cursor_factory=psycopg2.extras.RealDictCursor)
-    conn.autocommit = False
-    return conn
+
+    # Parse the URL and rebuild cleanly to avoid any formatting issues
+    try:
+        parsed = urllib.parse.urlparse(url)
+        # Extract components
+        db_host     = parsed.hostname
+        db_port     = parsed.port or 5432
+        db_name     = parsed.path.lstrip("/") or "postgres"
+        db_user     = parsed.username
+        db_password = urllib.parse.unquote(parsed.password or "")
+
+        conn = psycopg2.connect(
+            host=db_host,
+            port=db_port,
+            dbname=db_name,
+            user=db_user,
+            password=db_password,
+            cursor_factory=psycopg2.extras.RealDictCursor,
+            connect_timeout=15,
+            sslmode="require"
+        )
+        conn.autocommit = False
+        return conn
+    except Exception as e:
+        err = str(e)
+        st.error(
+            f"❌ Cannot connect to database.\n\n"
+            f"Check your DATABASE_URL in Streamlit Secrets.\n"
+            f"It should look like:\n"
+            f"`postgresql://postgres:PASSWORD@db.xxxx.supabase.co:5432/postgres`\n\n"
+            f"Hint: {err[:300]}"
+        )
+        st.stop()
 
 
 def _init_db():
