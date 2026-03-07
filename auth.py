@@ -22,20 +22,29 @@ import psycopg2.extras
 import resend
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CONFIG — reads from Railway environment variables
+# CONFIG — reads from st.secrets (Streamlit Cloud) with os.environ fallback
+# On Streamlit Cloud: App Settings → Secrets → paste your key=value pairs
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _db_url():
-    return os.environ.get("DATABASE_URL", "")
+def _get_secret(key, default=""):
+    """Read from st.secrets (Streamlit Cloud) with os.environ fallback."""
+    # Try st.secrets first (Streamlit Cloud secrets manager)
+    try:
+        val = st.secrets[key]
+        if val:
+            return val
+    except Exception:
+        pass
+    # Fallback to environment variable (local / other hosts)
+    val = os.environ.get(key, "")
+    if val:
+        return val
+    return default
 
-def _resend_key():
-    return os.environ.get("RESEND_API_KEY", "")
-
-def _from_email():
-    return os.environ.get("FROM_EMAIL", "onboarding@resend.dev")
-
-def _app_name():
-    return os.environ.get("APP_NAME", "Strategic AI Investment Architect")
+def _db_url():      return _get_secret("DATABASE_URL")
+def _resend_key():  return _get_secret("RESEND_API_KEY")
+def _from_email():  return _get_secret("FROM_EMAIL", "onboarding@resend.dev")
+def _app_name():    return _get_secret("APP_NAME", "Strategic AI Investment Architect")
 
 # ── Hide Streamlit chrome on auth pages ───────────────────────────────────────
 _HIDE_CSS = """
@@ -54,7 +63,7 @@ _HIDE_CSS = """
 def _get_db():
     url = _db_url()
     if not url:
-        st.error("DATABASE_URL environment variable not set. Please configure Railway variables.")
+        st.error("⚠️ DATABASE_URL not configured. Go to Streamlit Cloud → your app → Settings → Secrets and add: DATABASE_URL = \"your-supabase-connection-string\"")
         st.stop()
     conn = psycopg2.connect(url, cursor_factory=psycopg2.extras.RealDictCursor)
     conn.autocommit = False
